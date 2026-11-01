@@ -1,0 +1,28 @@
+//#CLIENTSIDE
+if (created || playerenters) {
+  dontblock;
+  if (this.on == 0) {
+    this.on = #f;
+    this.off = strreplace(#f,lampon,lampoff);
+    this.off = strreplace(this.off,.mng,.png);
+  }
+  this.night = -1;
+  timeout = 0.5;
+}
+if (timeout) {
+  this.hour = int((timevar % 5760) / 240);
+  this.isnight = this.hour < 6 || this.hour >= 18;
+  if (this.isnight != this.night) {
+    this.night = this.isnight;
+    if (this.isnight) {
+      setimg #v(this.on);
+      showimg 200,light4.png,x + imgwidth(this.on) / 32 - 4,y + imgheight(this.on) / 32 - 4;
+      changeimgvis 200,3;
+      changeimgcolors 200,0.8,0.6,0.3,0.5;
+    } else {
+      setimg #v(this.off);
+      hideimg 200;
+    }
+  }
+  timeout = 0.5;
+}

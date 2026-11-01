@@ -1,0 +1,2 @@
+//#CLIENTSIDE
+join lamp;

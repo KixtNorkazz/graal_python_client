@@ -1,0 +1,11 @@
+//#CLIENTSIDE
+if (created || playerenters) {
+  this.open = 0;
+  timeout = 0.1;
+}
+if (timeout) {
+  this.near = playerx > x - 2 && playerx < x + imgwidth(#f) / 16 + 2 && playery > y - 2 && playery < y + imgheight(#f) / 16 + 2;
+  if (this.near && this.open == 0) { this.open = 1; hide; }
+  if (!this.near && this.open == 1) { this.open = 0; show; }
+  timeout = 0.1;
+}

@@ -1,0 +1,9 @@
+{
+  "asset_dirs": ["path/to/server/world", "path/to/more/levels-and-images"],
+  "class_dirs": ["path/to/class/scripts"],
+  "server_script_dirs": ["path/to/server/scripts"],
+  "weapon_dirs": ["path/to/weapons"],
+  "account_dir": "",
+  "cache_dir": "cache",
+  "listserver": "91.99.73.49:9111"
+}
