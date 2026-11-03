@@ -1,5 +1,6 @@
 """A deliberately small GS1 subset interpreter: runs the client-side script of an NPC once (created / playerenters /
 timeout fired) and reports its visual effects. Anything it does not know is ignored (and counted in `unknown`)."""
+import safeexpr
 import math, random, re
 
 TRUE_FLAGS = {"created", "playerenters", "timeout"}
@@ -32,8 +33,10 @@ def _eval(expr, env):
     e = e.replace("||", " or ").replace("&&", " and ")
     e = re.sub(r"(?<![=!<>])!(?!=)", " not ", e)
     if re.search(r"[^0-9a-zA-Z_+\-*/().,<>=! %\s]", e): return 0.0
+    code = safeexpr.compile_expr(e)
+    if code is None: return 0.0
     try:
-        v = eval(e, {"__builtins__": {}}, {**names, **{w: 0 for w in re.findall(r"[a-zA-Z_][a-zA-Z_0-9.]*", e) if w not in names and w not in ("or", "and", "not")}})
+        v = eval(code, {"__builtins__": {}, **safeexpr.ARITH}, {**names, **{w: 0 for w in re.findall(r"[a-zA-Z_][a-zA-Z_0-9.]*", e) if w not in names and w not in ("or", "and", "not")}})
         return float(v)
     except Exception:
         return 0.0

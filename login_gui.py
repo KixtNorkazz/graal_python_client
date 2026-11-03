@@ -17,6 +17,7 @@ FIELDS = [("nick", "Nickname:", False), ("account", "Account:", False), ("passwo
 FX, FW, FH, FY0, FSTEP = 232, 300, 26, 446, 38
 ROW_H, MAX_ROWS = 24, 4
 BTN = (240, 568, 160, 38)
+BUILD_BTN = (420, 568, 100, 38)
 
 def _font(): return ImageFont.load_default()
 
@@ -68,7 +69,9 @@ class Screen:
                 fx, fy, fw, fh = self.field_rect(k)
                 if fx <= x < fx + fw and fy <= y < fy + fh: return k
         bx, by, bw, bh = BTN
-        return "start" if bx <= x < bx + bw and by <= y < by + bh else None
+        if bx <= x < bx + bw and by <= y < by + bh: return "start"
+        bx, by, bw, bh = BUILD_BTN
+        return "build" if bx <= x < bx + bw and by <= y < by + bh else None
 
     def draw(self, now, hover=None):
         im = self.bg.copy(); d = ImageDraw.Draw(im, "RGBA")
@@ -95,6 +98,9 @@ class Screen:
         d.rounded_rectangle((bx, by, bx + bw, by + bh), radius=6, fill=col, outline=(240, 220, 130, 255), width=2)
         t = text_img("Logging in..." if self.busy else ("Join" if self.servers else "Start"), (255, 255, 255), scale=2)
         im.alpha_composite(t, (bx + (bw - t.width) // 2, by + (bh - t.height) // 2))
+        bx, by, bw, bh = BUILD_BTN
+        d.rounded_rectangle((bx, by, bx + bw, by + bh), radius=6, fill=(60, 80, 110, 255) if hover == "build" else (45, 62, 88, 255), outline=(240, 220, 130, 255), width=2)
+        t = text_img("Build", (255, 255, 255), scale=2); im.alpha_composite(t, (bx + (bw - t.width) // 2, by + (bh - t.height) // 2))
         if self.status:
             for n, line in enumerate(self.status.split("\n")[:2]):
                 t = text_img(line, self.status_color, scale=1); im.alpha_composite(t, ((W - t.width) // 2, BTN[1] + BTN[3] + 12 + n * 14))
@@ -161,16 +167,24 @@ def join(screen, win):
             try: s.close()
             except Exception: pass
             screen.servers = None
-            screen.status, screen.status_color = "The game server did not let you in.\nIs the account already online? Wait a moment and try again.", (255, 150, 130); return None
+            why = s.disc_message[:70] or "It sent no level. The account may be saved at a place\nthat no longer exists; ask the server admin to move it."
+            screen.status, screen.status_color = "The game server did not let you in:\n" + why, (255, 150, 130); return None
         if nick: s.set_nickname(nick)
         save_saved(screen.vals); return s
     except (OSError, ConnectionError) as e:
         import crashguard; crashguard.note("login failed (network)")
-        screen.servers = None; screen.status, screen.status_color = "No contact with the server:\n%s" % (str(e)[:70] or type(e).__name__), (255, 150, 130); return None
+        why = getattr(s, "disc_message", "")
+        screen.servers = None; screen.status, screen.status_color = ("The game server did not let you in:\n" + why[:70]) if why else "No contact with the server:\n%s" % (str(e)[:70] or type(e).__name__), (255, 150, 130); return None
     except Exception as e:
         import crashguard; crashguard.note("login failed (error)")
         screen.servers = None; screen.status, screen.status_color = "Error: %s: %s\n(see crash.log)" % (type(e).__name__, str(e)[:60]), (255, 150, 130); return None
     finally: screen.busy = False
+
+def launch_build():
+    """The Build button: open the level editor in its own window (it works offline)."""
+    import subprocess
+    try: subprocess.Popen([sys.executable, os.path.join(HERE, "editor.py")], cwd=HERE)
+    except OSError: pass
 
 def run(version="222", listserver=("127.0.0.1", 9111), game_host=None, scale=1, win=None):
     own = win is None
@@ -181,12 +195,13 @@ def run(version="222", listserver=("127.0.0.1", 9111), game_host=None, scale=1, 
             for ev in win.events():
                 act = None
                 if ev[0] == "quit": return None
-                elif ev[0] == "down": act = screen.key(ev[1])
+                elif ev[0] == "down" or (ev[0] == "repeat" and ev[1] in window.REPEATING): act = screen.key(ev[1])
                 elif ev[0] == "text": screen.typed(ev[1])
                 elif ev[0] == "mousemove": hover = screen.hit(ev[1], ev[2])
                 elif ev[0] == "mousedown" and ev[1] == 1:
                     h = screen.hit(ev[2], ev[3])
-                    if h == "start": act = "join" if screen.servers else "start"
+                    if h == "build": launch_build()
+                    elif h == "start": act = "join" if screen.servers else "start"
                     elif h and h.startswith("row"): screen.sel = int(h[3:])
                     elif h: screen.focus = h
                 if act == "quit": return None

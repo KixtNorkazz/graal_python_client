@@ -6,7 +6,7 @@ _IDX = {c: i for i, c in enumerate(_B64)}
 
 class NwLevel:
     def __init__(self, name):
-        self.name, self.layers, self.links, self.npcs, self.signs, self.chests = name, {}, [], [], [], []
+        self.name, self.layers, self.links, self.npcs, self.signs, self.chests, self.baddies = name, {}, [], [], [], [], []
 
     @property
     def board(self):
@@ -40,6 +40,12 @@ def parse_nw(text, name="level.nw"):
             except ValueError: pass
         elif p[0] == "CHEST" and len(p) >= 4:
             try: lv.chests.append(dict(x=int(p[1]), y=int(p[2]), item=p[3], sign=int(p[4]) if len(p) > 4 else 0))
+            except ValueError: pass
+        elif p[0] == "BADDY" and len(p) >= 4:
+            body = []
+            while i < len(lines) and lines[i].strip() != "BADDYEND": body.append(lines[i]); i += 1
+            i += 1
+            try: lv.baddies.append(dict(x=float(p[1]), y=float(p[2]), type=int(p[3]) if p[3].isdigit() else 0, verses=(body + ["", "", ""])[:3]))
             except ValueError: pass
         elif p[0] == "SIGN" and len(p) >= 3:
             body = []

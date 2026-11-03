@@ -12,6 +12,9 @@ from PIL import Image, ImageDraw, ImageFont
 from gclient import Session
 import render, window
 from inventory import Inventory
+from playerlist import PlayerList, K_F7
+from worldmap import WorldMap
+from appearance import Appearance
 from chatline import History
 
 W, H, BAR = 640, 480, 24
@@ -48,7 +51,7 @@ def main():
     win = window.Window(f"Graal python client - {a.account}", W, H, a.scale)
     font = ImageFont.load_default()
 
-    inv = Inventory(); hist = History()
+    inv = Inventory(); hist = History(); pl = PlayerList(); wm = WorldMap(); ap_ = Appearance()
     held, walking, walk_start, next_tick, typing, text, shot_n = [], False, 0.0, 0.0, False, "", 0
     first_step, last_frame, fps = True, time.monotonic(), 0.0
     running = True
@@ -57,17 +60,25 @@ def main():
         now = time.monotonic()
         for ev in win.events():
             if ev[0] == "quit": running = False
+            elif ev[0] == "wheel" and ap_.open: ap_.wheel(ev[1])
             elif ev[0] == "wheel":
                 if not s.gui.wheel(s.input.sx, s.input.sy, ev[1]): s.input.wheel(ev[1])
+            elif ev[0] == "mousemove" and wm.open: wm.mouse(ev[1], ev[2])
             elif ev[0] == "mousemove":
                 if not s.gui.mouse("move", 0, ev[1], ev[2]): s.input.mouse_move(ev[1], ev[2])
             elif ev[0] in ("mousedown", "mouseup"):
                 if s.gui.mouse("down" if ev[0] == "mousedown" else "up", ev[1], ev[2], ev[3]): continue
+                if ap_.open:
+                    if ev[0] == "mousedown": ap_.click(ev[2], ev[3], s)
+                    continue
+                if wm.open: continue
                 if ev[0] == "mousedown" and inv.open and inv.click(ev[2], ev[3], s): continue
                 if not typing and ev[3] < H - BAR: s.input.mouse_button(ev[1], ev[0] == "mousedown", ev[2], ev[3])
                 elif ev[0] == "mouseup": s.input.mouse_button(ev[1], False, ev[2], ev[3])
             elif ev[0] == "down" and s.gui.capturing() and ev[1] != window.K_F12: s.gui.key(ev[1], True)
             elif ev[0] == "down" and getattr(s, "msgbox", None) is not None and not typing and not s.msgbox.expired() and s.msgbox.key(ev[1]): held.clear()
+            elif ev[0] == "down" and ap_.open and not typing and ev[1] != window.K_F12: ap_.key(ev[1], s); held.clear()
+            elif ev[0] == "down" and wm.open and not typing and ev[1] != window.K_F12: wm.key(ev[1], s); held.clear()
             elif ev[0] == "down" and inv.open and not typing and ev[1] != window.K_F12: inv.key(ev[1], s)
             elif ev[0] == "down":
                 k = ev[1]
@@ -83,7 +94,7 @@ def main():
                 elif k in (window.K_RETURN, window.K_TAB): typing = True; held.clear(); hist.reset()
                 elif k == window.K_ESCAPE: running = False
                 elif k == window.K_F12:
-                    img = render_frame(s, now, walking, walk_start, typing, text, font, fps, inv)
+                    img = render_frame(s, now, walking, walk_start, typing, text, font, fps, inv, pl, wm, ap_)
                     path = os.path.join(a.shots, f"shot_{shot_n:03d}.png"); img.convert("RGB").save(path); shot_n += 1; print("saved", path)
                 elif k == ord("q"): inv.toggle(s); held.clear(); walking = False
                 elif k == ord("d") and not s.frozen(): print("weapon:", inv.fire(s)); walking = False
@@ -91,13 +102,19 @@ def main():
                 elif k == ord("h") and s.me.get("HORSEIMAGE"): s.dismount()
                 elif k == ord("a") and not s.attacking() and not s.frozen(): s.grab()
                 elif k == window.K_F11: win.toggle_fullscreen()
+                elif k == K_F7: pl.toggle(s, win)
+                elif k == ord("m"): wm.toggle(s); held.clear(); walking = False
+                elif k == ord("f"): ap_.toggle(s); held.clear(); walking = False
                 elif k == ord("s") and not s.attacking() and not s.frozen():
                     walking = False; s.attack()
                 elif k in KEYDIR and KEYDIR[k] not in held: held.append(KEYDIR[k])
             elif ev[0] == "up":
                 if ev[1] != window.K_F12: s.input.key(ev[1], False)
                 if ev[1] in KEYDIR and KEYDIR[ev[1]] in held: held.remove(KEYDIR[ev[1]])
+            elif ev[0] == "repeat" and typing and ev[1] == window.K_BACKSPACE: text = text[:-1]
+            elif ev[0] == "repeat" and s.gui.capturing() and ev[1] in window.REPEATING: s.gui.key(ev[1], True)
             elif ev[0] == "text" and s.gui.capturing(): s.gui.typed(ev[1])
+            elif ev[0] == "text" and ap_.open: ap_.typed(ev[1])
             elif ev[0] == "text" and typing: text = (text + ev[1])[:100]
         try:
             s.poll()
@@ -125,7 +142,8 @@ def main():
             if s.me.get("MESSAGE") and time.time() - getattr(s, "say_time", 0) > 6: s.clear_chat()
         except (ConnectionError, OSError) as e:
             print("disconnected:", e); break
-        img = render_frame(s, now, walking, walk_start, typing, text, font, fps, inv)
+        pl.pump(s)
+        img = render_frame(s, now, walking, walk_start, typing, text, font, fps, inv, pl, wm, ap_)
         win.present(img.tobytes())
         if s.gmap and s.level_name and time.monotonic() - now < 0.02:
             try: render.prebuild_one(s.levels, s.npcs, s.weapons, s.gmap, s.level_name)
@@ -136,6 +154,7 @@ def main():
     if a.offline and a.state: s.save_state(a.state)
     try: s.stop(); s.pump(0.2); s.close()
     except Exception: pass
+    pl.close_window()
     win.close()
 
 def pending_label(s):
@@ -152,7 +171,7 @@ def walk_dirs(held):
 def snap_texts(s): return list(s.texts.values())
 def snap_sign(s): return s.sign[0] if time.time() < s.sign[1] else ""
 
-def render_frame(s, now, walking, walk_start, typing, text, font, fps, inv):
+def render_frame(s, now, walking, walk_start, typing, text, font, fps, inv, pl, wm, ap_):
     out = Image.new("RGBA", (W, H), (0, 0, 0, 255))
     snap = s.snapshot()
     lv = s.levels.get(s.level_name) if s.level_name else None
@@ -175,7 +194,7 @@ def render_frame(s, now, walking, walk_start, typing, text, font, fps, inv):
         else: mb.draw(out)
     s.gui.render(out)
     if not inv.open: render.draw_chat(out, inv.status(s), 320, 40)
-    inv.draw(out, s)
+    inv.draw(out, s); pl.draw(out, s); wm.draw(out, s); ap_.draw(out, s)
     d = ImageDraw.Draw(out); d.rectangle((0, H - BAR, W, H), fill=(255, 255, 255, 255))
     label = f"> {text}_" if typing else f"{s.level_name or 'loading...'}  ({s.pos[0] // 16},{s.pos[1] // 16})   Enter = chat   {fps:3.0f} fps{pending_label(s)}"
     d.text((6, H - BAR + 6), label, font=font, fill=(0, 0, 0, 255))

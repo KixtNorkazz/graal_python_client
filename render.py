@@ -2,7 +2,12 @@
 import os, re, sys, math, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PIL import Image
-import assets
+import assets, warnings
+
+# Pictures come from the server. A 10 kB PNG can declare 9000x9000 pixels, ~320 MB as RGBA, which gets the app killed on a phone.
+# The largest real picture is ~6 million pixels; Pillow refuses anything over twice this limit and warns above it: make that an error too.
+Image.MAX_IMAGE_PIXELS = 4096 * 4096
+warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 TILE = 16
 _img_cache = {}
@@ -60,6 +65,8 @@ def read_gmap(name):
         if s_.startswith('"') or (inside and s_): rows.append([x.strip().strip('"') for x in s_.split(",")])
     _gmap_cache[p] = (stamp, rows); return rows
 
+BASE_TILESET = os.environ.get("GRAAL_BASE_TILESET") or "pics1.png"
+
 def tile_src(t):
     return (t % 16) * 16 + (t // 512) * 256, ((t // 16) % 32) * 16
 
@@ -81,7 +88,7 @@ _level_img = {}
 def _clear_tile_caches():
     _ts_cache.clear(); _tile_img.clear(); _level_img.clear()
 
-def tileset_for(level_name, tiledef_script, npc_scripts, other_scripts=()):
+def tileset_for(level_name, tiledef_script, npc_scripts, other_scripts=(), base=None):
     """Default pics1.png, then tiledefs in order: the TileDefs weapon and the NPC scripts of other loaded levels (prefix match only), then
     this level's own NPC scripts (prefix match or #L). `removetiledefs` (optionally with a prefix) drops what was registered before it.
     The canvas is cached by what was applied, so crossing into a level with the same tiles costs nothing."""
@@ -96,8 +103,8 @@ def tileset_for(level_name, tiledef_script, npc_scripts, other_scripts=()):
     for sc in npc_scripts: feed(_tiledef_cmds(sc), True)
     lname = level_name.lower()
     applied = [(img, a, b, two) for img, prefix, a, b, two in defs if prefix == "#L" or lname.startswith(prefix.lower())]
-    base = load_image("pics1.png"); ims = [load_image(d[0]) for d in applied]
-    key = (base is not None, tuple((d, im is not None) for d, im in zip(applied, ims)))
+    base_name = base or BASE_TILESET; base = load_image(base_name); ims = [load_image(d[0]) for d in applied]
+    key = (base_name.lower(), base is not None, tuple((d, im is not None) for d, im in zip(applied, ims)))
     c = _ts_cache.get(key)
     if c is not None: return c
     canvas = Image.new("RGBA", (2048, 512))
@@ -244,6 +251,29 @@ def item_sprite(t):
         _item_cache[t] = im
     return _item_cache[t]
 
+def _on_screen(fx, n, x, y, size):
+    """Does any part of the NPC's picture fall inside the view? Its position is the picture's top-left corner, and pictures such as a ship or a
+    tree are several hundred pixels big: a fixed margin made them vanish while most of them was still on screen."""
+    name = fx.image
+    im = load_image(name) if name and name not in ("-", "#c#") and not fx.hidden else None
+    if im is None: w = h = 64
+    else:
+        part = n.get("IMAGEPART")
+        if fx.imgpart: w, h = fx.imgpart[3], fx.imgpart[4]
+        elif part and part["w"] and part["h"]: w, h = part["w"], part["h"]
+        else: w, h = im.size
+        if fx.zoom != 1.0: x -= w * (fx.zoom - 1) / 2; y -= h * (fx.zoom - 1) / 2; w *= fx.zoom; h *= fx.zoom
+    return x + w > -64 and y + h > -64 and x < size[0] + 64 and y < size[1] + 64
+
+
+def _light_on_screen(im, s, x, y, size):
+    """Does a showimg light (scaled around its centre, maybe rotated) reach into the view? Checked before the costly scale/tint work."""
+    w, h = im.width * s["zoom"], im.height * s["zoom"]
+    if s.get("rot"): w = h = math.hypot(w, h)
+    x -= (w - im.width) / 2; y -= (h - im.height) / 2
+    return x + w > 0 and y + h > 0 and x < size[0] and y < size[1]
+
+
 def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_lights=True, t=0.0):
     levels, npcs, weapons, me = snap["levels"], snap["npcs"], snap["weapons"], snap["me"]
     gmap, cur = snap["gmap"], snap["level"]
@@ -280,9 +310,10 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
     view = world.crop((camx, camy, camx + size[0], camy + size[1]))
     under, normal, over, lights = [], [], [], []
     for nid, n in npcs.items():
-        if "GMAPLEVELX" not in n or "X2" not in n: continue
-        gx = ox + (n["GMAPLEVELX"] - cx) * 1024 + n["X2"] - camx; gy = oy + (n["GMAPLEVELY"] - cy) * 1024 + n["Y2"] - camy
-        if not (-300 < gx < size[0] + 300 and -300 < gy < size[1] + 300): continue
+        if "X2" not in n or (gmap and "GMAPLEVELX" not in n): continue
+        ncx, ncy = n.get("GMAPLEVELX", cx), n.get("GMAPLEVELY", cy)
+        gx = ox + (ncx - cx) * 1024 + n["X2"] - camx; gy = oy + (ncy - cy) * 1024 + n["Y2"] - camy
+        if not (-1024 < gx < size[0] + 1024 and -1024 < gy < size[1] + 1024): continue   # coarse; pictures and lights are checked one by one below
         if snap.get("fx"): fx = snap["fx"](nid, n)
         else:
             fkey = (nid, n.get("SCRIPT", ""), n.get("IMAGE", ""), n["X2"], n["Y2"])
@@ -290,13 +321,14 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
             if fx is None: fx = _fx_cache[fkey] = gs1.run(n.get("SCRIPT", ""), n.get("IMAGE", ""), n["X2"] / 16, n["Y2"] / 16)
         if fx.hidden or not n.get("VISFLAGS", 1) & 1: pass
         dx, dy = (fx.x - n["X2"] / 16) * 16, (fx.y - n["Y2"] / 16) * 16
+        for k, s_ in fx.shows.items():
+            lights.append((gx + (s_["x"] - n["X2"] / 16) * 16, gy + (s_["y"] - n["Y2"] / 16) * 16, s_))
+        if not _on_screen(fx, n, gx + dx, gy + dy, size): continue
         item = dict(n=n, fx=fx, gx=gx + dx, gy=gy + dy, key=gy + dy)
         vf = n.get("VISFLAGS", 0)
         if fx.under or vf & 4: under.append(item)
         elif fx.over or vf & 2: over.append(item)
         else: normal.append(item)
-        for k, s in fx.shows.items():
-            lights.append((gx + (s["x"] - n["X2"] / 16) * 16, gy + (s["y"] - n["Y2"] / 16) * 16, s))
     def draw_npc(it):
         n, fx = it["n"], it["fx"]; name = fx.image
         if not name or name in ("-", "#c#") or fx.hidden: return
@@ -389,7 +421,7 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
     if show_lights:
         for gx, gy, s in lights:
             im = load_image(s["image"])
-            if im is None: continue
+            if im is None or not _light_on_screen(im, s, gx, gy, size): continue
             im = _scaled(im, s["zoom"]); col = s["color"] or (1, 1, 1, 1)
             if s.get("rot"): im = im.rotate(-math.degrees(s["rot"]), expand=True, resample=Image.BICUBIC)
             r, g, b, a = col; R, G, B, A = im.convert("RGBA").split()
@@ -406,7 +438,7 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
             view.paste(Image.merge("RGBA", (*rgb.split(), region.split()[3])), (x0, y0))
     drawn = 0; add_layer = None
     for nid, n in npcs.items():
-        if "GMAPLEVELX" not in n or "X2" not in n: continue
+        if "X2" not in n or (gmap and "GMAPLEVELX" not in n): continue
         fx = snap["fx"](nid, n) if snap.get("fx") else None
         for idx, sh in (fx.shows.items() if fx else ()):
             em = sh.get("em")
@@ -414,7 +446,7 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
                 if drawn > 600: break
                 im = load_image(p["image"])
                 if im is None: continue
-                base = (ox + (n["GMAPLEVELX"] - cx) * 1024 - camx, oy + (n["GMAPLEVELY"] - cy) * 1024 - camy) if idx < 200 else (0, 0)
+                base = (ox + (n.get("GMAPLEVELX", cx) - cx) * 1024 - camx, oy + (n.get("GMAPLEVELY", cy) - cy) * 1024 - camy) if idx < 200 else (0, 0)
                 px, py = base[0] + p["x"], base[1] + p["y"]
                 if not (-128 < px < size[0] + 128 and -128 < py < size[1] + 128): continue
                 im = _scaled(im, max(0.02, p["zoom"]))

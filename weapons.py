@@ -1,6 +1,7 @@
 """Client-side weapon scripts (GS1 subset) for 'gani weapons': setani / replaceani / freezeplayer / setplayerprop / setstring,
 events weaponfired, timeout, playershootssword, playerchats, with `sleep` as a coroutine pause. The weapon script runs from the part
 after `//#CLIENTSIDE` (the first part is server-side)."""
+import safeexpr
 import math, re, time, warnings
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
@@ -287,10 +288,10 @@ def evaluate(expr, ctx):
             v = dict.__getitem__(self, k) if k in self else _Zero(0.0)
             return _Arr(v) if isinstance(v, list) else v
     env["T"] = _T(ctx.w.this); env["keycode"] = _keycode; env["strreplace"] = lambda a, b, c: str(a).strip("'\"").replace(str(b).strip("'\""), str(c).strip("'\"")); env["strcontains"] = lambda a, b: str(b).lower() in str(a).lower(); env["onwater"] = lambda x, y: _water(ctx, x, y); env["keydown2"] = lambda k, f=1: 1.0 if ctx.s.input.vk_is_down(to_float(k)) else 0.0; env["tiles_"] = lambda x, y: float(_tile_at(ctx, x, y)); env["arraylen"] = lambda a: float(len(a)) if isinstance(a, list) else 0.0
+    env["_pow_"] = lambda a, b: safeexpr.safe_pow(to_float(a), to_float(b)); env["_mul_"] = lambda a, b: safeexpr.safe_mul(to_float(a), to_float(b))
     code = _CODE.get(e, 0)
     if code == 0:
-        try: code = compile(e.strip(), "<gs1>", "eval")
-        except Exception: code = None
+        code = safeexpr.compile_expr(e)   # no attribute access (sandbox escape), no shifts, float ** and * (no huge ints)
         if len(_CODE) > 20000: _CODE.clear()
         _CODE[e] = code
     if code is None: return 0.0

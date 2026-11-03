@@ -34,9 +34,10 @@ def arrived(key, path):
     index()[key] = path
     for fn in listeners: fn(key)
 
-def find(name: str):
+def find(name: str, level=False):
+    """The local path of a file; a missing one is asked for from the server (a level file only when `level` says it is really needed)."""
     key = os.path.basename(name).lower(); p = index().get(key)
     if fetcher is not None:
-        if p is None: fetcher.want(key)
+        if p is None: fetcher.want(key, level)
         else: fetcher.revalidate(p)
     return p

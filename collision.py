@@ -47,6 +47,18 @@ class Collision:
         """The blocking rectangles (gmap-global px, at the NPC's current position) of one NPC."""
         self._npc_rects(s); return list(self._by_id.get(nid, ()))
 
+    def wall_overlap(self, s, px, py):
+        """How many pixels of the player's box at local (px, py) lie on wall tiles (0 = none). Used to let a player who was put inside a wall
+        (a warp or link whose destination overlaps one) walk out of it: a step is allowed when it lowers this, never deeper or along it."""
+        rows = s.gmap_rows() if s.gmap else None
+        cx, cy = s.cell if s.gmap else (0, 0)
+        x0 = cx * 1024 + px + BOX[0]; y0 = cy * 1024 + py + BOX[1]; x1 = x0 + BOX[2]; y1 = y0 + BOX[3]; area = 0
+        for gty in range(y0 // 16, (y1 - 1) // 16 + 1):
+            for gtx in range(x0 // 16, (x1 - 1) // 16 + 1):
+                if self.tile_blocked(s, gtx, gty, rows):
+                    area += (min(x1, gtx * 16 + 16) - max(x0, gtx * 16)) * (min(y1, gty * 16 + 16) - max(y0, gty * 16))
+        return area
+
     def blockers(self, s, px, py):
         """Ids of the NPCs whose shapes the player's box at local (px, py) overlaps."""
         cx, cy = s.cell if s.gmap else (0, 0)

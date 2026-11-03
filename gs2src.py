@@ -23,6 +23,15 @@ def sandbox_path(name, create=False):
     if create: os.makedirs(os.path.dirname(path), exist_ok=True)
     return path if os.path.realpath(path).startswith(os.path.realpath(SANDBOX) + os.sep) or not os.path.exists(path) else None
 
+SANDBOX_MAX_FILE = 1 << 20; SANDBOX_MAX_FILES = 256   # savestring/savelines come from server scripts: they must not fill the disk
+
+def sandbox_write(path, data):
+    """Write a script's file inside the sandbox, within the size and file-count limits; False when refused."""
+    if len(data) > SANDBOX_MAX_FILE: return False
+    if not os.path.exists(path) and sum(len(f) for _, _, f in os.walk(SANDBOX)) >= SANDBOX_MAX_FILES: return False
+    with open(path, "w", encoding="latin1") as f: f.write(data)
+    return True
+
 _TOK = re.compile(r"""
     (?P<ws>\s+|//[^\n]*|/\*.*?\*/)
   | (?P<num>\d+\.\d+|\d+|\.\d+)
@@ -757,7 +766,7 @@ class Interp:
             if name == "loadstring" and args: p = sandbox_path(args[0]); return open(p, encoding="latin1").read() if p and os.path.isfile(p) else ""
             if name == "savestring" and args:
                 p = sandbox_path(args[0], create=True)
-                if p: open(p, "w", encoding="latin1").write(o)
+                if p: sandbox_write(p, o)
                 return None
         return None
 
@@ -775,7 +784,7 @@ def _load_lines(arr, name):
 
 def _save_lines(arr, name):
     p = sandbox_path(name, create=True)
-    if p: open(p, "w", encoding="latin1").write("\n".join(text(x) for x in arr))
+    if p: sandbox_write(p, "\n".join(text(x) for x in arr))
     return None
 
 def _load_folder(arr, pattern):

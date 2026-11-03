@@ -53,10 +53,18 @@ class Stream:
             if len(self.buf) < n + 2: return
             pk, self.buf = self.buf[2:2 + n], self.buf[2 + n:]
             if self.login:
-                yield 3, zlib.decompress(pk); continue
+                yield 3, _inflate(zlib.decompressobj(), pk); continue
             t, body = pk[0], pk[1:]
             body, self.key = xor_words(body, self.key, self.seed, 12 if t == T_RAW else 4)
-            yield t, (zlib.decompress(body) if t == T_ZLIB else bz2.decompress(body) if t == T_BZ2 else body)
+            yield t, (_inflate(zlib.decompressobj(), body) if t == T_ZLIB else _inflate(bz2.BZ2Decompressor(), body) if t == T_BZ2 else body)
+
+
+MAX_INFLATED = 32 << 20
+
+def _inflate(d, data):
+    out = d.decompress(data, MAX_INFLATED)
+    if not d.eof: raise ValueError('compressed frame is incomplete or expands past the limit')
+    return out
 
 
 def listserver_hello(seed: int, version=b"GNW30123newmain"):

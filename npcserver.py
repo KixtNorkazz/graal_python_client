@@ -316,7 +316,7 @@ class NpcServer:
             if str(props.get("ACCOUNTNAME", "")).lower() == acc.lower(): pid = p
         if isinstance(target, PlayerSrv) and pid is None: pid = target.sess.me.get("ID")
         sess.log.append(f"pm -> {acc}: {msg}")
-        if pid is not None and getattr(sess, "conn", None) is not None: sess.send_pm(int(pid), msg); return 1.0
+        if pid is not None and getattr(sess, "conn", None) is not None: sess.send_pm(int(pid), msg, limit=False); return 1.0
         return 0.0
 
     def addweapon(self, name, session=None):

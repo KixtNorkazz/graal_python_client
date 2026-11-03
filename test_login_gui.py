@@ -19,6 +19,7 @@ def main():
     check(s.key(window.K_ESCAPE) == "quit", "Esc quits")
     im = s.draw(0.0); check(im.size == (lg.W, lg.H), f"frame size {im.size}")
     bx, by, bw, bh = lg.BTN; check(s.hit(bx + 5, by + 5) == "start" and s.hit(bx - 3, by) is None, "the Start button hit test")
+    bx, by, bw, bh = lg.BUILD_BTN; check(s.hit(bx + 5, by + 5) == "build", "the Build button hit test")
     fx, fy, fw, fh = s.field_rect("account"); check(s.hit(fx + 3, fy + 3) == "account", "click on a field")
     s.busy = True; s.typed("x"); check(s.vals["password"] == "hemmelig" and s.key(window.K_RETURN) is None, "nothing is typed or sent while logging in")
     lg.save_saved(s.vals); d = lg.load_saved()

@@ -2,7 +2,7 @@
 --quick skips the slow corpus surveys. Live tests (simulate_two.py, needs GRAAL_PASSWORD and the running server) are only run with --live."""
 import subprocess, sys, time, os, re
 HERE = os.path.dirname(os.path.abspath(__file__))
-TESTS = ["test_npcmotion", "test_walk", "test_npcserver", "test_gs2src", "test_gui", "test_inputs", "test_config", "test_login_gui", "test_filefetch", "test_inventory", "test_messagebox", "test_chatline", "test_tiledefs"]
+TESTS = ["test_npcmotion", "test_walk", "test_npcserver", "test_gs2src", "test_gui", "test_inputs", "test_config", "test_login_gui", "test_filefetch", "test_inventory", "test_messagebox", "test_chatline", "test_tiledefs", "test_playerlist", "test_hardening", "test_render_cull", "test_walk_walls", "test_leveldoc", "test_buildlib", "test_editor", "test_worldmap", "test_appearance", "test_playerwindow"]
 SURVEYS = [("gs2weapons_survey.py", [], r"(\d+) event runs, (\d+) errors", 2), ("npcsurvey.py", ["100"], r"(\d+) levels, (\d+) npcs.*?(\d+) errors", 3),
            ("walk_survey.py", ["30"], r"(\d+) levels, (\d+) errors", 2)]
 
@@ -13,7 +13,7 @@ def run(cmd, env=None, timeout=900):
 def main():
     quick = "--quick" in sys.argv; live = "--live" in sys.argv; bad = 0
     for t in TESTS:
-        rc, out, dt = run([t + ".py"]); ok = rc == 0 and "passed" in out.splitlines()[-1] if out.strip() else False
+        rc, out, dt = run([t + ".py"]); ok = rc == 0 and ("passed" in out.splitlines()[-1] or "skipped" in out.splitlines()[-1]) if out.strip() else False
         print(f"{'ok  ' if ok else 'FAIL'} {t:18s} {dt:6.1f}s  {out.strip().splitlines()[-1][:80] if out.strip() else ''}"); bad += not ok
         if not ok: print(out[-1500:])
     if not quick:

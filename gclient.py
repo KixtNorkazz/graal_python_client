@@ -2,6 +2,7 @@
 import collections, math, os, random, re, socket, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from graalproto import *
+import leveldoc
 from props import parse_npc, parse_player, Reader
 import enums
 from minclient import Conn, list_servers, VERSIONS
@@ -44,8 +45,8 @@ class Session:
         self.account, self.password, self.version, self.verbose = account.encode(), password.encode(), version, verbose
         self.listserver, self.game_host = listserver, game_host
         self.levels, self.npcs, self.players, self.weapons = {}, {}, {}, {}
-        self.me = {}; self.level_name = None; self.gmap = None; self.cur_loading = None
-        self.chat = []; self.pm = []; self.pms = []; self.server_text = []; self.log = []
+        self.me = {}; self.level_name = None; self.gmap = None; self.cur_loading = None; self.disc_message = ""
+        self.chat = []; self.pm = []; self.pms = []; self.online = {}; self.map_positions = {}; self.map_asked = 0.0; self.pm_log = []; self.last_pm_sent = 0.0; self.server_text = []; self.log = []
         self.lp = LineParser(); self.conn = None; self.pos = (0, 0); self.frames = 0
         self.items = []; self.flag_values = {}; self.horses = []; self.chests = {}; self.flags = set(); self.tokens = []; self.arrays = {}; self.texts = {}; self.polys = {}; self.imgs = {}; self.sign = ("", 0.0); self.effect = None; self.defmovement = True; self.unsupported = {}; self.actions = []; self.vars = {}; self.account_name = account; self.ani_replace = {}; self.frozen_until = 0.0; self.gani_start = 0.0; self.weapon_ani_until = 0.0
         self.runner = WeaponRunner(self); self.npcrt = NpcRuntime(self); self.proj = Projectiles(self); self.bombs = Bombs(self); self.input = Input(self); self.gui = Gui(self); self.npcserver = NpcServer(self); self.timers = {}; self.map_cell = None; self.coll = collision.Collision(); self.attack_until = 0.0
@@ -54,6 +55,14 @@ class Session:
         """Player prop 0 (NICKNAME): what the real client sends in its first props line; the server may add the guild tag."""
         nick = nick.strip()[:30]
         if nick: self.me["NICKNAME"] = nick; self.send(gline(2, gchar(0) + gstr(nick.encode("latin1", "replace"))))
+
+    def set_appearance(self, head=None, body=None):
+        """Wear another head and / or body: player props 11 (head: length + 100, then the name) and 35 (body), what `sethead` and `setbody` send."""
+        out = b""
+        if head: h = head.encode("latin1", "replace")[:100]; out += gchar(11) + gchar(len(h) + 100) + h; self.me["HEADIMAGE"] = head
+        if body: out += gchar(35) + gstr(body.encode("latin1", "replace")[:200]); self.me["BODYIMAGE"] = body
+        if out: self.send(gline(2, out))
+        return bool(out)
 
     def connect(self, servers=None):
         if servers is None: servers, _ = list_servers(*self.listserver, self.account, self.password, False)
@@ -146,13 +155,17 @@ class Session:
                 if self.level_name is None: self.level_name = n
         elif pid in (30, 45, 68, 69) and getattr(self, "files", None):
             {30: self.files.on_failed, 45: self.files.on_uptodate, 68: self.files.on_large_start, 69: self.files.on_large_end}[pid](payload.decode("latin1"))
+        elif pid == 16: self.disc_message = payload.decode("latin1", "replace").strip()
         elif pid == 1 and self.cur_loading: self.cur_loading.links.append(payload.decode("latin1").split())
         elif pid == 5 and self.cur_loading and len(payload) >= 2:
             from messagebox import decode_sign; self.cur_loading.signs.append((payload[0] - 0x20, payload[1] - 0x20, decode_sign(payload[2:])))
         elif pid == 9:
-            self.me.update(parse_player(payload)); self._own_pos()
+            props = parse_player(payload); self.me.update(props); self._own_pos(props)
         elif pid == 8:
             pidn = gint(payload[:2]); newp = parse_player(payload[2:])
+            if "DISCONNECT" in newp: self.online.pop(pidn, None)
+            else:
+                o = self.online.setdefault(pidn, {}); o.update({k: v for k, v in newp.items() if k in ("NICKNAME", "ACCOUNTNAME", "LEVEL", "COMMUNITYNAME", "X2", "Y2", "GMAPLEVELX", "GMAPLEVELY")})
             if newp.get("JOINLEAVELVL") == 0: self.players.pop(pidn, None); newp = {}
             elif newp: d = self.players.setdefault(pidn, {}); d.update(newp)
             d = self.players.get(pidn, {})
@@ -218,10 +231,12 @@ class Session:
             if len(items) >= 3 and items[0].lower() == "clientside":
                 self.runner.broadcast("action" + items[2].lower(), params=items[3:], only=items[1])
             elif items: self.runner.broadcast("action" + items[0].lower(), params=items[1:])
+        elif pid == 37 and self._map_players_reply(payload): pass
         elif pid == 37:
             self.pm.append(payload.decode("latin1"))
             try: parts = [x for x in csv_split(payload[2:].decode("latin1")) if x]; self.pms.append(dict(sender=gint(payload[:2]), title=parts[0] if len(parts) > 1 else "", text=parts[-1] if parts else ""))
             except Exception: pass
+            self._log_pm(payload)
         elif pid == 165: self.npc_move_packet(payload)
         elif pid == 189: self.npc_move_packet(payload, v2=True)
         elif pid == 175: self.proj.remote(payload)
@@ -239,20 +254,67 @@ class Session:
             self.map_cell = None
         elif pid == 15: self.log.append("warp failed")
 
-    def _own_pos(self):
-        if "X2" in self.me and "Y2" in self.me: self.pos = (self.me["X2"], self.me["Y2"])
+    def _own_pos(self, props):
+        """Our position from a PLAYERPROPS packet, only when it carries one (X2/Y2 in pixels, or X/Y in half tiles); other props leave it alone."""
+        x, y = self.pos
+        if "X2" in props or "Y2" in props: self.pos = (props.get("X2", x), props.get("Y2", y))
+        elif "X" in props or "Y" in props: self.pos = (props["X"] * 8 if "X" in props else x, props["Y"] * 8 if "Y" in props else y)
 
     def request_level(self, name, modtime=0):
         self.send(gline(35, gint_enc(modtime, 5) + name.encode()))
-
-    def send_pm(self, pid, msg):
-        """PLI_PRIVATEMESSAGE (28): {GUSHORT count}{GUSHORT player id}...{message} (gs2emu allows one every 4 s)."""
-        self.send(gline(28, gint_enc(1, 2) + gint_enc(int(pid), 2) + csv_join([msg]).encode("latin1", "replace")))
 
     def say(self, text):
         self.send(gline(2, gchar(12) + gstr(text.encode("latin1")[:223])))
         self.me["MESSAGE"] = text; self.say_time = time.time()
         self.chat.append((None, "me", text))
+    def online_players(self):
+        """The other players on the server, sorted by nickname: [{id, nick, account, level}]."""
+        out = [dict(id=i, nick=str(o.get("NICKNAME") or ""), account=str(o.get("ACCOUNTNAME") or ""), level=str(o.get("LEVEL") or "")) for i, o in self.online.items() if o.get("ACCOUNTNAME") and not str(o["ACCOUNTNAME"]).startswith("(")]
+        return sorted(out, key=lambda p: (p["nick"] or p["account"]).lower())
+
+    def player_name(self, pid):
+        o = self.online.get(pid) or {}
+        return str(o.get("NICKNAME") or o.get("ACCOUNTNAME") or f"#{pid}")
+
+    def send_pm(self, ids, text, limit=True):
+        """PLI_PRIVATEMESSAGE: {GSHORT count}{GSHORT id...}{message}. The server allows one message every 4 seconds. Returns (ok, reason)."""
+        if isinstance(ids, int): ids = [ids]
+        text = text.strip()
+        if not text or not ids: return False, "nothing to send"
+        wait = 4.0 - (time.time() - self.last_pm_sent) if limit else 0
+        if wait > 0: return False, "wait %d s before the next message" % (int(wait) + 1)
+        self.send(gline(28, gint_enc(len(ids), 2) + b"".join(gint_enc(i, 2) for i in ids) + csv_join([text]).encode("latin1", "replace")))
+        self.last_pm_sent = time.time()
+        self.pm_log.append(dict(t=time.time(), dir="out", who=", ".join(self.player_name(i) for i in ids), text=text)); del self.pm_log[:-200]
+        return True, ""
+
+    MAP_PLAYERS_MARK = "MAPPLAYERS"
+    MAP_PLAYERS_EVERY = 3.0
+
+    def request_map_players(self):
+        """Ask the server's MapPlayers-NPC (server/npcMapPlayers.txt) where every player is: it answers with one private message
+        `MAPPLAYERS` + account,level,x,y for each player, x and y in tiles of the whole gmap. gs2emu does not send the moves of far away players itself."""
+        now = time.time()
+        if now - self.map_asked < self.MAP_PLAYERS_EVERY or getattr(self, "local_inventory", False): return False
+        self.map_asked = now; self.send_triggeraction(0, 0, 0, ["servermapplayers"]); return True
+
+    def _map_players_reply(self, payload):
+        """The answer to request_map_players (never shown as a private message). Returns True if the packet was one."""
+        try: parts = [x for x in csv_split(payload[2:].decode("latin1")) if x]
+        except Exception: return False
+        if not parts or not parts[-1].startswith(self.MAP_PLAYERS_MARK): return False
+        items = parts[-1][len(self.MAP_PLAYERS_MARK):].split(","); now = time.time()
+        for i in range(0, len(items) - 3, 4):
+            try: self.map_positions[items[i]] = (items[i + 1], float(items[i + 2]) * 16, float(items[i + 3]) * 16, now)
+            except ValueError: continue
+        return True
+
+    def _log_pm(self, payload):
+        try:
+            sender = gint(payload[:2]); parts = [x for x in csv_split(payload[2:].decode("latin1")) if x]
+            if parts: self.pm_log.append(dict(t=time.time(), dir="in", who=self.player_name(sender), text=" ".join(parts[1:] if len(parts) > 1 else parts))); del self.pm_log[:-200]
+        except Exception: pass
+
     def clear_chat(self):
         self.send(gline(2, gchar(12) + gstr(b""))); self.me["MESSAGE"] = ""
     def walk(self, direction, steps, delay=0.05, stop_on_link=True):
@@ -609,8 +671,7 @@ class Session:
             n = self._wname(name)
             for k in [k for k in self.weapons if self._wname(k) == n]: del self.weapons[k]
 
-    CHEST_ITEMS = ("greenrupee", "bluerupee", "redrupee", "bombs", "darts", "heart", "glove1", "bow", "bomb", "shield", "sword", "fullheart", "superbomb", "battleaxe",
-                   "goldensword", "mirrorshield", "glove2", "lizardshield", "lizardsword", "goldrupee", "fireball", "fireblast", "nukeshot", "joltbomb", "spinattack")
+    CHEST_ITEMS = leveldoc.CHEST_ITEMS
 
     def chest_list(self):
         """The closed chests of this level: [{x, y, item (server item type), gain: {prop: amount}}] (tile coordinates)."""
@@ -914,7 +975,7 @@ class Session:
         if now - lv.meta_try < 1.0: return None
         lv.meta_try = now
         import assets, nwlevel
-        p = assets.find(name)
+        p = assets.find(name, level=True)
         if not p: return None
         try: nw = nwlevel.load_nw(p)
         except Exception: lv.meta = dict(links=[], signs=[]); return lv.meta
@@ -970,6 +1031,7 @@ class Session:
     def step_cell(self):
         """gmap: when walking over a sub-level edge, wrap local x/y and tell the server the new cell (props 43/44)."""
         x, y = self.pos; cx, cy = self.cell; out = b""; moved = False
+        if self._next_cell(x, y) is None: return False
         if x < 0: cx -= 1; x += 1024; moved = True
         elif x >= 1024: cx += 1; x -= 1024; moved = True
         if y < 0: cy -= 1; y += 1024; moved = True
@@ -980,6 +1042,27 @@ class Session:
             if rows and 0 <= cy < len(rows) and 0 <= cx < len(rows[0]): self.level_name = rows[cy][cx]
             self.send(gline(2, gchar(43) + gchar(cx) + gchar(44) + gchar(cy) + gchar(78) + enc_pos(x) + gchar(79) + enc_pos(y)))
         return moved
+
+    def _next_cell(self, x, y):
+        """The gmap cell local position (x, y) lies in when it is past the edge of ours, if that cell exists; else None
+        (inside our cell, on a plain level, or past the outer edge of the gmap). Before the map file has arrived its size is unknown: any
+        cell that is not negative is let through (only a negative one is harmful: the server stores it as 255)."""
+        if (0 <= x < 1024 and 0 <= y < 1024) or not self.gmap: return None
+        cx, cy = self.cell
+        cx += -1 if x < 0 else 1 if x >= 1024 else 0; cy += -1 if y < 0 else 1 if y >= 1024 else 0
+        if cx < 0 or cy < 0: return None
+        rows = self.gmap_rows()
+        if rows and (cy >= len(rows) or cx >= len(rows[cy])): return None
+        return (cx, cy)
+
+    def off_world(self, x, y):
+        """gmap: True when local position (x, y) is too far past the outer edge of the whole map. Like Graal, the player may lean over it
+        as long as the wall box at the feet stays inside: that is how links on the outer rows/columns are reached. A cell past the edge must
+        never be sent: the server stores it as one unsigned byte (-1 -> 255) and the next login got no level.
+        A plain level is left to the collision code: it knows the neighbours joined by edge links, and those links are taken by walking over the edge."""
+        if not self.gmap: return False
+        bx, by, bw, bh = collision.BOX; x0, y0, x1, y1 = x + bx, y + by, x + bx + bw - 1, y + by + bh - 1
+        return any(not (0 <= px < 1024 and 0 <= py < 1024) and self._next_cell(px, py) is None for px, py in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)))
 
     def gmap_rows(self):
         if not self.gmap: return None
@@ -1053,6 +1136,24 @@ class Session:
 
     PUSH_POINT = {0: (1.5, 0.5), 1: (0.0, 2.0), 2: (1.5, 3.5), 3: (3.0, 2.0)}
 
+    def _corner_slide(self, direction, x, y):
+        """The step to (x, y) is blocked, but half a step (8 px) to the side the way is open: slide sideways now, like Graal, so the next step goes
+        through. Paths one tile wide (the worldmap is mostly that) are otherwise only walkable from exactly the right half-tile. -> new position or None."""
+        px, py = self.pos
+        sides = ((8, 0), (-8, 0)) if direction in "UD" else ((0, 8), (0, -8))
+        sides = sorted(sides, key=lambda o: ((px + o[0]) % 16, (py + o[1]) % 16) != (0, 0))   # prefer the side that lines the box up with the tiles
+        for ox, oy in sides:
+            sx, sy = px + ox, py + oy
+            if not self.coll.blocked(self, x + ox, y + oy) and not self.coll.blocked(self, sx, sy) and not self.off_world(sx, sy) and not self.off_world(x + ox, y + oy):
+                return (sx, sy)
+        return None
+
+    def _out_of_wall(self, x, y):
+        """The player stands partly inside a wall (a warp put them there: the teleporter by the cave in worldmap_b5 drops you with the feet on a
+        wall row) and the step to (x, y) lowers that overlap without touching an NPC: allow it, or every direction stays blocked for ever."""
+        here = self.coll.wall_overlap(self, *self.pos)
+        return here > 0 and self.coll.wall_overlap(self, x, y) < here and not self.coll.blockers(self, x, y)
+
     def _send_pushed(self, d, x, y):
         """Walking into an NPC online: PLI_TRIGGERACTION `pushed,<dir>` at the point in front of the player (what `FUN_0053e7a8` sends in Graal_222.exe).
         The server turns it into the event `actionpushed` of the NPC there (the server-side canpush-canpull class moves the NPC, and everyone sees it).
@@ -1123,7 +1224,7 @@ class Session:
         for rx, ry, rw, rh in self.coll.npc_rects_of(self, nid):
             if self.coll.rect_blocked(self, (rx + sx, ry + sy, rw, rh), ignore={nid}): return False
         x, y = self.pos[0] + sx, self.pos[1] + sy
-        if self.coll.blocked(self, x, y, skip={nid}): return False
+        if self.off_world(x, y) or self.coll.blocked(self, x, y, skip={nid}): return False
         n = self.npcs[nid]; n["X2"] += sx; n["Y2"] += sy; inst.src = (n["X2"], n["Y2"]); inst.fx.x += sx / 16; inst.fx.y += sy / 16
         self.pos = (x, y); self.npcrt.version += 1
         if self.step_cell(): self.send(gline(2, gchar(PROP_SPRITE) + gchar(d))); self.ensure_neighbours()
@@ -1168,7 +1269,7 @@ class Session:
     def step(self, direction, first, use_links=True):
         """One 50 ms walking tick in `direction` (8 px). Walls and NPC shapes block; returns a link that was taken, or None."""
         if self._pull(direction): return None
-        d = DIRS[direction]; x, y = self.pos
+        d = DIRS[direction]; x, y = self.pos; x0, y0 = x, y
         if direction in "LR": x += -8 if direction == "L" else 8
         else: y += -8 if direction == "U" else 8
         owned = time.time() < self.weapon_ani_until
@@ -1176,18 +1277,25 @@ class Session:
         head = (b"" if owned else gchar(PROP_GANI) + gstr(wname)) + gchar(PROP_SPRITE) + gchar(d) if first else b""
         if not owned: self.me["GANI"] = wname.decode()
         self.me["SPRITE"] = d
-        if self.coll.blocked(self, x, y):
-            self._send_pushed(d, x, y)
-        if self.coll.blocked(self, x, y) and not self._push(direction, x, y):
-            self._pushed_event(direction, x, y)
+        if self.off_world(x, y):
             if first: self.send(gline(2, head))
             return None
+        if self.coll.blocked(self, x, y) and self._out_of_wall(x, y): pass
+        elif self.coll.blocked(self, x, y):
+            self._send_pushed(d, x, y)
+        if self.coll.blocked(self, x, y) and not self._out_of_wall(x, y) and not self._push(direction, x, y):
+            side = self._corner_slide(direction, x, y)
+            if side is None:
+                self._pushed_event(direction, x, y)
+                if first: self.send(gline(2, head))
+                return None
+            x, y = side
         self.pos = (x, y)
         if self.step_cell():
             self.send(gline(2, (b"" if owned else gchar(PROP_GANI) + gstr(wname)) + gchar(PROP_SPRITE) + gchar(d))); self.ensure_neighbours()
         else:
-            axis, v = (PROP_X2, x) if direction in "LR" else (PROP_Y2, y)
-            self.send(gline(2, head + gchar(axis) + enc_pos(v)))
+            moved = (gchar(PROP_X2) + enc_pos(x) if x != x0 else b"") + (gchar(PROP_Y2) + enc_pos(y) if y != y0 else b"")
+            self.send(gline(2, head + moved))
         self.pickup_items(); self.horse_touch()
         link = self.link_at() if use_links else None
         if link: self.take_link(link)
