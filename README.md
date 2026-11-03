@@ -1,6 +1,6 @@
 # graal_reborn client
 
-A Python client for the Graal online game protocol (versions 2.22 / 2.31), reverse engineered from the original client. It logs in through a list server, renders levels and gmaps with an SDL2 window (loaded with ctypes) and Pillow, and runs GS1 and GS2 scripts for weapons and NPCs on the client side. It is tested against gs2emu.
+A Python client reverse engineered by observing Graal online game protocol (versions 2.22 / 2.31). It logs in through a list server, renders levels and gmaps with an SDL2 window (loaded with ctypes) and Pillow, and runs GS1 and GS2 scripts for weapons and NPCs on the client side. It is tested against gs2emu.
 
 ## Requirements
 - Python 3.10 or newer
@@ -12,17 +12,31 @@ A Python client for the Graal online game protocol (versions 2.22 / 2.31), rever
 ./start.sh              # Linux/macOS: login screen
 start.bat               # Windows: login screen
 ./start.sh ACCOUNT      # skips the screen, asks for the password in the terminal
-python3 viewer.py --account ACCOUNT --listserver host:port
+python3 start.py --account ACCOUNT --listserver host:port
 ```
 After Start the client asks the list server for its game servers and shows them as a list (name, players, language) like the original client; choose one with Up/Down and Enter (or click it and press Join). With `ACCOUNT` on the command line the first server of the list is used. The password can also be given in the environment variable `GRAAL_PASSWORD`. `./debug.sh` / `debug.bat` check Python, Pillow, SDL2, files and the connection to the list server and write `debug.log`.
 
+## The folder
+| | |
+| --- | --- |
+| `start.py`, `start.sh`, `start.bat` | start the game |
+| `build.py`, `build.sh`, `build.bat` | start Build, the level editor |
+| `paths.json` | folders and the list server (see below); `paths.example.json` is a template |
+| `settings.json` | the settings of the `F1` window (sound, volumes) |
+| `login.json`, `crash.log`, `chat_history.txt` | the remembered account (no password), errors, the chat history |
+| `worlds/<server name>/` | what the client downloaded from that server, sorted into `heads/ bodies/ hats/ swords/ shields/ tilesets/ ganis/ sounds/ levels/ images/` (pictures that are none of these, like windows and doors, go to `images/`). Files you put in these folders yourself are used too, and a newer download replaces a file where you put it |
+| `levels/` | levels made with Build |
+| `server/` | files for the game server (the map's player positions, the appearance lists) |
+| `engine/` | the code: not meant to be changed |
+| `tools/`, `tests/` | developer scripts and the tests |
+
 ## Configuration
-Which list server the client asks is set in `paths.json` (key `listserver`). Copy `paths.example.json` to `paths.json` next to `viewer.py` and edit it; relative paths in it are relative to that file. `--listserver host:port` on the command line overrides it, and `GRAAL_PATHS` can point at another file. Without a `paths.json` the default `91.99.73.49:9111` (Graal Reborn) is used. To test against your own server, set `"listserver": "127.0.0.1:9111"` (or its address).
+Which list server the client asks is set in `paths.json` (key `listserver`). Copy `paths.example.json` to `paths.json` (in this folder, next to `start.py`) and edit it; relative paths in it are relative to that file. `--listserver host:port` on the command line overrides it, and `GRAAL_PATHS` can point at another file. Without a `paths.json` the default `91.99.73.49:9111` (Graal Reborn) is used. To test against your own server, set `"listserver": "127.0.0.1:9111"` (or its address).
 
 | key | meaning |
 | --- | --- |
 | `listserver` | `host:port` of the list server |
-| `cache_dir` | where files downloaded from the game server are stored (default `cache/`) |
+| `worlds_dir` | where files downloaded from the game servers are stored (default `worlds/`, one folder per server named after it) |
 | `asset_dirs` | local folders searched for images, ganis, levels and sounds (optional) |
 | `class_dirs` | class files used by `join X;` (optional) |
 | `server_script_dirs` | server script folders, searched last (optional) |
@@ -31,11 +45,8 @@ Which list server the client asks is set in `paths.json` (key `listserver`). Cop
 
 All the local folders are optional: the client downloads the files it needs from the game server while you play.
 
-## Files from the original client
-`builtin/pics1.png` (the default tileset) and `builtin/sprites.png` come from the original Graal client; game servers do not have them. Without `pics1.png` levels are drawn without tiles and the status line says `pics1.png missing`. `logos-1.jpg` (optional) goes next to `viewer.py` and is the login screen background.
-
 ## Controls
-Arrow keys walk (diagonals work), `A` grab, `A` + arrow pull/push, `S` sword, `D` fire the active weapon, `Q` inventory, `Tab` chat (Up arrow shows the history), `M` map with the players on the same gmap, `F` appearance, `F7` player list (click a player to select, double-click or Enter to write a private message; received ones pop up), `F11` fullscreen, `F12` screenshot.
+Arrow keys walk (diagonals work), `A` grab, `A` + arrow pull/push, `S` sword, `D` fire the active weapon, `Q` inventory, `Tab` chat (Up arrow shows the history), `M` map with the players on the same gmap, `F` appearance, `F7` player list (click a player to select, double-click or Enter to write a private message; received ones pop up), `F1` settings (sound on/off, volume of sound effects and of looped sounds), `F11` fullscreen, `F12` screenshot.
 
 ## Map (M) and player list (F7)
 On a server with a `.gmap`, `M` opens the map of the whole gmap: one small picture per level (the level files of the gmap are fetched while it is open), your own position, and the other players who are online on the same gmap with their names. `F7` opens the list of everyone online in a window of its own, placed beside the game window; drag it wherever you like (a second monitor, next to the game) and the game keeps running. Click a player, double-click or Enter to write a private message; Esc or the close button closes it. gs2emu only sends the moves of players close to you, so without help a player more than one cell away is drawn as a ring with a `?` at the position the server last reported. With the server file `server/npcMapPlayers-NPC.txt` in the server's `npcs` folder (gs2emu with an NPC-server reloads it by itself) the map asks the server every 3 seconds for the position of everyone and shows all players on the gmap live. The file is a Control-NPC whose script answers the client's `servermapplayers` trigger action with one private message; the client never shows that message.
@@ -70,6 +81,6 @@ Build reads and writes the same `.nw` format as gs2emu (`BOARD`, `LINK`, `SIGN`,
 
 ## Tests
 ```
-python3 run_tests.py --quick
+python3 tests/run_tests.py --quick
 ```
-Some tests need level and script data in the folders from `paths.json` and are skipped or fail without it. `ARCHITECTURE.md` describes how the modules fit together.
+Some tests need level and script data in the folders from `paths.json` and are skipped or fail without it. `ARCHITECTURE.md` describes how the modules (in `engine/`) fit together.

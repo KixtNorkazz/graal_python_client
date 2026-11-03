@@ -4,6 +4,6 @@
   "server_script_dirs": ["path/to/server/scripts"],
   "weapon_dirs": ["path/to/weapons"],
   "account_dir": "",
-  "cache_dir": "cache",
+  "worlds_dir": "worlds",
   "listserver": "91.99.73.49:9111"
 }

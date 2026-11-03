@@ -5,6 +5,6 @@ if [ -n "${1:-}" ] && [ "${1#-}" = "$1" ]; then
   account="$1"; shift
   if [ -z "${GRAAL_PASSWORD:-}" ]; then read -rsp "Password for $account: " GRAAL_PASSWORD; echo; fi
   export GRAAL_PASSWORD
-  exec python3 viewer.py --account "$account" "$@"
+  exec python3 start.py --account "$account" "$@"
 fi
-exec python3 viewer.py "$@"
+exec python3 start.py "$@"

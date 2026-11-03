@@ -20,5 +20,8 @@ chat_history.txt
 logos-1.jpg
 levels/
 build_data/
-builtin/pics1.png
-builtin/sprites.png
+settings.json
+worlds/
+engine/builtin/pics1.png
+engine/builtin/sprites.png
+engine/logos-1.jpg

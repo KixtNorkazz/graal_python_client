@@ -1,6 +1,6 @@
 # Architecture (map of client_re)
 
-Goal: a Python Graal client, reverse-engineered from Graal_222/231, that talks to a gs2emu server **and** can run levels offline.
+All modules below are in `engine/`; `start.py` and `build.py` in the project folder put it on the import path. Tools are in `tools/`, tests in `tests/`.
 
 ## Layers
 1. **Wire**: `graalproto.py` (framing, zlib/bz2, XOR keys, Graal ints), `minclient.py` (login via listserver), `props.py` (player / NPC property parsing), `enums.py`.
