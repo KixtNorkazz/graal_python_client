@@ -7,7 +7,13 @@ XOR:     k = (k * 0x8088405 + seed) & 0xFFFFFFFF per 32-bit LE word; k0 = 0x04A8
          Each direction has its own key state that persists across packets; both use the client's seed.
 Lines:   body is '\\n'-separated lines: chr(id + 0x20) + payload. Numbers/strings use chr(n + 0x20) length prefixes.
 """
-import bz2, struct, zlib
+import struct, zlib
+try:
+    import bz2
+    BZ2Decompressor = bz2.BZ2Decompressor
+except ImportError:   # python-for-android has no _bz2: libbz2 through ctypes (the server sends packets over 4 KB as bzip2)
+    bz2 = None
+    from bz2_ctypes import BZ2Decompressor
 
 K0, MULT, M32 = 0x04A80B38, 0x8088405, 0xFFFFFFFF
 T_RAW, T_ZLIB, T_BZ2 = 2, 4, 6
@@ -40,7 +46,7 @@ class Stream:
         if self.login:
             body = zlib.compress(plain, 9)
             return struct.pack(">H", len(body)) + body
-        ptype = ptype or (T_RAW if len(plain) < 0x30 else T_ZLIB if len(plain) < 0x1000 else T_BZ2)
+        ptype = ptype or (T_RAW if len(plain) < 0x30 else T_ZLIB if len(plain) < 0x1000 or bz2 is None else T_BZ2)
         body = plain if ptype == T_RAW else zlib.compress(plain, 9) if ptype == T_ZLIB else bz2.compress(plain, 9)
         body, self.key = xor_words(body, self.key, self.seed, 12 if ptype == T_RAW else 4)
         return struct.pack(">H", len(body) + 1) + bytes([ptype]) + body
@@ -56,7 +62,7 @@ class Stream:
                 yield 3, _inflate(zlib.decompressobj(), pk); continue
             t, body = pk[0], pk[1:]
             body, self.key = xor_words(body, self.key, self.seed, 12 if t == T_RAW else 4)
-            yield t, (_inflate(zlib.decompressobj(), body) if t == T_ZLIB else _inflate(bz2.BZ2Decompressor(), body) if t == T_BZ2 else body)
+            yield t, (_inflate(zlib.decompressobj(), body) if t == T_ZLIB else _inflate(BZ2Decompressor(), body) if t == T_BZ2 else body)
 
 
 MAX_INFLATED = 32 << 20
@@ -93,39 +99,27 @@ def gint_enc(v: int, n: int) -> bytes:
 PLO_RAWDATA = 100
 
 class LineParser:
-    """Splits decoded frames into ('line', id, payload) and ('raw', id, data) items; keeps raw-mode state."""
-    def __init__(self): self.raw = 0
+    """Splits decoded frames into ('line', id, payload) and ('raw', id, data) items; keeps raw-mode state.
+    A packet can be split over two frames (gs2emu does that over a slow link): the unfinished end of a frame is kept and joined
+    to the next one. Taking it as a whole packet cut NPC props short (no y, then no script), so a level lost its tiledefs."""
+    def __init__(self): self.raw = 0; self.rest = b""
     def feed(self, plain: bytes):
+        if self.rest: plain, self.rest = self.rest + plain, b""
         pos = 0
         while pos < len(plain):
             if self.raw > 0:
+                if len(plain) - pos < self.raw: self.rest = plain[pos:]; return   # the raw block goes on in the next frame
                 chunk, pos, self.raw = plain[pos:pos + self.raw], pos + self.raw, 0
                 yield ("raw", chunk[0] - 0x20, chunk[1:-1] if chunk.endswith(b"\n") else chunk[1:])
                 continue
             nl = plain.find(b"\n", pos)
-            line, pos = (plain[pos:], len(plain)) if nl < 0 else (plain[pos:nl], nl + 1)
+            if nl < 0: self.rest = plain[pos:]; return   # no newline yet: the packet goes on in the next frame
+            line, pos = plain[pos:nl], nl + 1
             if not line: continue
             pid, payload = line[0] - 0x20, line[1:]
             yield ("line", pid, payload)
             if pid == PLO_RAWDATA and len(payload) == 3: self.raw = gint(payload)
 
-
-_FIXED = {1: 1, 2: 1, 3: 3, 4: 1, 5: 1, 6: 1, 7: 1, 13: 5, 14: 2, 15: 1, 16: 1, 17: 1, 18: 1, 19: 1, 22: 1, 24: 3,
-          25: 2, 26: 1, 27: 3, 28: 3, 29: 3, 30: 5, 31: 3, 32: 1, 33: 1, 36: 3, 76: 3, 78: 2, 79: 2, 80: 2}
-_STR = {0, 10, 12, 20, 21, 34, 35, 52, 75}
-
-def parse_props(p: bytes):
-    """Return ([(prop_id, value_bytes)], unparsed_tail). Stops at the first prop whose size is unknown."""
-    out, i = [], 0
-    while i < len(p):
-        pid = p[i] - 0x20; i += 1
-        if pid in _FIXED: n = _FIXED[pid]
-        elif pid in _STR: n = 1 + (p[i] - 0x20) if i < len(p) else 0
-        elif pid in (8, 9): n = 1 + ((1 + p[i] - 0x20 if p[i] - 0x20 > 4 else 0)) if i < len(p) else 0
-        elif pid == 11: n = 1 + ((p[i] - 0x20 - 100) if p[i] - 0x20 >= 100 else 0) if i < len(p) else 0
-        else: return out, p[i - 1:]
-        out.append((pid, p[i:i + n])); i += n
-    return out, b""
 
 def prop_x2(v: bytes) -> int:
     x = gint(v); return -(x >> 1) if x & 1 else x >> 1

@@ -1,5 +1,5 @@
 """Log in (like minclient) and print every decoded server packet with its PLO name. Usage: GRAAL_PASSWORD=.. python3 trace.py TestA [seconds]"""
-import os, sys, time, collections
+import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from graalproto import *
 from minclient import Conn, list_servers, VERSIONS

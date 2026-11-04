@@ -3,6 +3,7 @@ F7 opens the list in a window of its own, which can be moved next to (or away fr
 
 The game server sends every online player as PLO_OTHERPLPROPS when you log in and when they log in; a player who leaves the server is announced with the
 DISCONNECT prop. `Session.online` holds them. Pure logic plus `draw()`; the viewer feeds it keys."""
+import uitext
 import time
 from PIL import Image, ImageDraw
 import window
@@ -100,7 +101,7 @@ class PlayerList:
                 h = 8 + 12 * len(lines); x, y = 16, out.size[1] - 40 - h
                 d.rectangle((x, y, x + 440, y + h), fill=(20, 24, 40, 225), outline=(240, 220, 130, 255), width=2)
                 for i, l in enumerate(lines): d.text((x + 6, y + 4 + 12 * i), l, fill=(255, 255, 255, 255))
-                d.text((x + 6, y - 12), "F7 = player list", fill=(230, 230, 200, 255))
+                d.text((x + 6, y - 12), uitext.t("pl_button"), fill=(230, 230, 200, 255))
             return
 
     def draw_panel(self, out, s):
@@ -112,7 +113,7 @@ class PlayerList:
         log_lines = log_lines[-LOG_LINES:]
         h = 30 + max(1, len(shown)) * ROW_H + 18 + 12 * max(1, len(log_lines)) + 30
         d.rectangle((px, py, px + pw, py + h), fill=(20, 24, 40, 225), outline=(240, 220, 130, 255), width=2)
-        d.text((px + 8, py + 8), f"Players online: {len(rows)}   (click = choose, double-click or Enter = PM, Esc = close)", fill=(255, 255, 255, 255))
+        d.text((px + 8, py + 8), f"Players online: {len(rows)}   " + uitext.t("pl_help"), fill=(255, 255, 255, 255))
         y = py + 26
         if not rows: d.text((px + 8, y + 2), "(nobody else is online)", fill=(200, 200, 200, 255))
         for i, p in enumerate(shown):

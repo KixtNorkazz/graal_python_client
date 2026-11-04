@@ -52,6 +52,23 @@ def main():
     t.handle("pkt", 37, reply)
     check(t.map_positions["bob"][:3] == ("worldmap.gmap", 94 * 16.0, 30.5 * 16) and t.map_positions["carol"][1] == 48.0 and not t.pm and not t.pm_log, "the reply is read, and it is not shown as a private message")
     t.handle("pkt", 37, gint_enc(5, 2) + b'"","hello"'); check(t.pm_log and t.pm_log[-1]["text"] == "hello", "an ordinary private message still is one")
+    # read_gmap is called 6 to 20 times a frame (collision, drawing): it must not look at the file on disk every time (os.stat is slow on Windows).
+    import render, tempfile, assets
+    d = tempfile.mkdtemp(); gp = os.path.join(d, "zzstat.gmap")
+    with open(gp, "w") as f: f.write('GRMAP001\nWIDTH 2\nHEIGHT 1\nLEVELNAMES\n"zz_a.nw","zz_b.nw"\nLEVELNAMESEND\n')
+    real_find, real_stat, n = assets.find, os.stat, [0]
+    assets.find = lambda name, *a, **k: gp if name == "zzstat.gmap" else real_find(name, *a, **k)
+    def counting(*a, **k): n[0] += 1; return real_stat(*a, **k)
+    os.stat = counting
+    try: rows = [render.read_gmap("zzstat.gmap") for _ in range(200)]
+    finally: os.stat = real_stat; assets.find = real_find
+    check(rows[-1] == [["zz_a.nw", "zz_b.nw"]] and n[0] <= 2, "200 read_gmap calls in a row read the rows and stat the file at most twice (%d)" % n[0])
+    # F11: SDL_SetWindowFullscreen must get the window pointer as a pointer (without argtypes a 64-bit pointer crashed: OverflowError on Windows, segfault on Linux).
+    import subprocess
+    code = "import window; w = window.Window('zz', 64, 48); w.toggle_fullscreen(); w.toggle_fullscreen(); print('F11 OK')"
+    r = subprocess.run([sys.executable, "-c", code], cwd=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"), env=dict(os.environ, SDL_VIDEODRIVER="offscreen"), capture_output=True, text=True, timeout=30)
+    if "SDL" in (r.stderr or "") and "F11 OK" not in r.stdout and r.returncode == 1 and "toggle" not in r.stderr: print("  (no SDL here, F11 not tested)")
+    else: check("F11 OK" in r.stdout, "toggling fullscreen twice works: %r %r" % (r.returncode, r.stderr[-200:]))
     print("worldmap tests passed")
 
 main()

@@ -2,6 +2,8 @@
 
 All modules below are in `engine/`; `start.py` and `build.py` in the project folder put it on the import path. Tools are in `tools/`, tests in `tests/`.
 
+Goal: a Python Graal client, reverse-engineered from Graal_222/231, that talks to a gs2emu server **and** can run levels offline.
+
 ## Layers
 1. **Wire**: `graalproto.py` (framing, zlib/bz2, XOR keys, Graal ints), `minclient.py` (login via listserver), `props.py` (player / NPC property parsing), `enums.py`.
 2. **Session** `gclient.py` (`Session`): state of one client (level, pos, npcs, players, items, chests, weapons, flags, inventory props in `me`), packet handlers,

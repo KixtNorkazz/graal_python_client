@@ -7,7 +7,7 @@ Drawing is a plain 2D look (no Torque skins): windows with a title bar, raised b
 so this is a functional GUI, not a pixel copy of the real client's. Positions are relative to the parent control, screen = 640x480."""
 import re, time
 from PIL import Image, ImageDraw, ImageFont
-from gs2src import Obj, DictObj, NullObj, num, text, truth
+from gs2src import Obj, DictObj, num, text, truth
 import gs2sched, gs2src
 
 TITLE_H = 18
@@ -190,8 +190,6 @@ class Gui:
         if c in self.roots: self.roots.remove(c); self.roots.append(c)
 
     def capturing(self): return self.focus is not None
-    def visible_any(self): return any(r.shown() for r in self.roots)
-
     def scripts(self):
         for w in self.s.runner.weapons.values():
             if w.gs2: yield w

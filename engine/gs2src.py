@@ -11,7 +11,7 @@ from gs2sched import Wait
 
 class Gs2Error(Exception): pass
 
-import os, json
+import os
 SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server_files")   # in the project folder
 
 def sandbox_path(name, create=False):

@@ -1,5 +1,5 @@
 """Parser for .gani animation files (frames of sprite placements, one line per facing direction)."""
-import re, assets
+import assets
 
 def cur_pending(block):
     return any(b for b in block[-4:])
@@ -69,7 +69,7 @@ def frame_at(g, t):
     dur = [0.05] * n
     for idx, w in g.waits:
         if 0 <= idx < n: dur[idx] += 0.05 * w
-    total = sum(dur); t = t % total if g.loop or True else min(t, total)
+    total = sum(dur); t = t % total   # every gani repeats here, also those without LOOP (the own player's are ended by gclient via SETBACKTO)
     for i, d in enumerate(dur):
         if t < d: return i
         t -= d

@@ -1,5 +1,5 @@
 """Offline renderer: builds a 640x480-ish view of the gmap around the player from a Session snapshot (PIL only)."""
-import os, re, sys, math, collections
+import os, re, sys, math, time, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PIL import Image
 import assets, warnings
@@ -15,11 +15,12 @@ _img_cache = {}
 def load_image(name, kind=None):
     key = name.lower()
     if key not in _img_cache:
-        p = assets.find(name, kind=kind)
-        try:
-            im = Image.open(p).convert("RGBA") if p else None
-        except Exception:
-            im = None
+        p = assets.find(name, kind=kind); im = None
+        for cand in ([p] + [c for c in assets.candidates(name) if c != p] if p else []):   # a damaged copy must not hide a good one with the same name
+            try: im = Image.open(cand).convert("RGBA"); break
+            except Image.DecompressionBombError: break
+            except Exception: continue
+        if p and im is None: assets.broken(name, kind)   # no local copy can be read: fetch it from the server
         _img_cache[key] = im
     return _img_cache[key]
 
@@ -50,20 +51,23 @@ def _forget_missing(key=None):
 assets.listeners.append(_forget_missing)
 
 def read_gmap(name):
-    """rows[y][x] = level name. Cached per file and modification time (the collision code asks for it on every blocked() call)."""
+    """rows[y][x] = level name. Cached per file and modification time (the collision code asks for it on every blocked() call). The file is looked at
+    on disk at most once a second: os.stat is cheap on Linux but slow on Windows (more so in a OneDrive folder with the virus scanner), and with
+    6 to 20 calls a frame it held the gmaps at 18-23 fps there."""
     p = assets.find(name)
     if not p: return []
+    c = _gmap_cache.get(p); now = time.monotonic()
+    if c and now - c[2] < 1.0: return c[1]
     try: stamp = os.stat(p).st_mtime
     except OSError: stamp = None
-    c = _gmap_cache.get(p)
-    if c and c[0] == stamp: return c[1]
+    if c and c[0] == stamp: _gmap_cache[p] = (stamp, c[1], now); return c[1]
     rows = []; inside = False
     for ln in open(p, encoding="latin1"):
         s_ = ln.strip()
         if s_ == "LEVELNAMES": inside = True; continue
         if s_ == "LEVELNAMESEND": inside = False; continue
         if s_.startswith('"') or (inside and s_): rows.append([x.strip().strip('"') for x in s_.split(",")])
-    _gmap_cache[p] = (stamp, rows); return rows
+    _gmap_cache[p] = (stamp, rows, now); return rows
 
 BASE_TILESET = os.environ.get("GRAAL_BASE_TILESET") or "pics1.png"
 
@@ -72,8 +76,20 @@ def tile_src(t):
 
 _TILEDEF_CMD = re.compile(r"\b(addtiledef2?|removetiledefs)\b([^;{}\n]*)")
 
+_cmds_cache = {}
+
 def _tiledef_cmds(text):
-    """Ordered tiledef commands of a script: ('add', image, prefix, x, y) / ('remove', prefix_or_None)."""
+    """Ordered tiledef commands of a script: ('add', image, prefix, x, y) / ('remove', prefix_or_None). Cached per script text: on a gmap
+    tileset_for reads the TileDefs weapon (80 kB) and every NPC script for each of the 25 cells around on every frame (5.5 ms here, three times that
+    on Windows), and the scripts hardly ever change."""
+    text = text or ""
+    got = _cmds_cache.get(text)
+    if got is None:
+        if len(_cmds_cache) > 4000: _cmds_cache.clear()
+        got = _cmds_cache[text] = tuple(_parse_tiledef_cmds(text))
+    return got
+
+def _parse_tiledef_cmds(text):
     for m in _TILEDEF_CMD.finditer(re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", text or "", flags=re.S))):
         name, rest = m.group(1), [a.strip() for a in m.group(2).split(",")]
         if name == "removetiledefs": yield ("remove", rest[0] or None); continue
@@ -109,8 +125,15 @@ def tileset_for(level_name, tiledef_script, npc_scripts, other_scripts=(), base=
     if c is not None: return c
     canvas = Image.new("RGBA", (2048, 512))
     if base: canvas.paste(base, (0, 0))
+    # addtiledef (a whole tileset) is the bottom layer, the last one winning. addtiledef2 pictures go on top of it, the larger ones first, so a smaller
+    # picture is never hidden by a larger one; pictures of the same size keep their order (the later one on top). Levels write them in both orders:
+    # greendale-pub_1 the small one first (addtiledef2 val_frost-insides.png,#L,1024,0; addtiledef2 sighisoara-tiles.png,#L,0,0), portwolfe_b2 the
+    # full-width one first and then twelve small lacuna_extracrap pieces - "the last one wins" broke the pub, "the first one wins" broke portwolfe.
     for (img, a, b, two), im in zip(applied, ims):
-        if im: canvas.paste(im, (a, b) if two else (0, 0))
+        if im and not two: canvas.paste(im, (0, 0))
+    overlays = [(im, a, b) for (img, a, b, two), im in zip(applied, ims) if im and two]
+    for im, a, b in sorted(overlays, key=lambda o: -o[0].width * o[0].height):
+        canvas.paste(im, (a, b))
     if len(_ts_cache) >= 24: _clear_tile_caches()
     _ts_cache[key] = canvas; return canvas
 
@@ -139,10 +162,16 @@ def _gmap_scripts(npcs):
         if n.get("SCRIPT") and "GMAPLEVELX" in n: scripts[(n["GMAPLEVELX"], n["GMAPLEVELY"])].append(n["SCRIPT"])
     return scripts
 
-def prebuild_one(levels, npcs, weapons, gmap_name, cur_level, radius=2):
+_prebuild_done = {}
+
+def prebuild_one(levels, npcs, weapons, gmap_name, cur_level, radius=2, remembered=(), rev=None):
     """Build the image of one level near us that has its board but no image yet (a ring of `radius` cells), so that walking into it later costs nothing.
-    Returns True if something was built (call again in the next idle moment)."""
+    Returns True if something was built (call again in the next idle moment). Once it has found nothing to build it does not look again until
+    something it depends on changes (`rev`: the session's npc_rev; the viewer calls it on every frame and the look costs 25 tilesets)."""
     if not gmap_name: return False
+    sig = (gmap_name, cur_level, radius, rev, id(npcs), len(npcs), len(weapons.get("TileDefs", b"")), len(remembered),
+           tuple(sorted((n, getattr(l, "version", 0), bool(l.board)) for n, l in levels.items())), len(_level_img))
+    if rev is not None and _prebuild_done.get("sig") == sig: return False
     rows = read_gmap(gmap_name); pos = {n: (x, y) for y, r in enumerate(rows) for x, n in enumerate(r)}
     if cur_level not in pos: return False
     cx, cy = pos[cur_level]; tiledefs = weapons.get("TileDefs", b"").replace(b"\xa7", b"\n").decode("latin1"); scripts = _gmap_scripts(npcs)
@@ -151,11 +180,11 @@ def prebuild_one(levels, npcs, weapons, gmap_name, cur_level, radius=2):
         if not (0 <= y < len(rows) and 0 <= x < len(rows[0])): continue
         name = rows[y][x]; lv = levels.get(name)
         if not lv or not lv.board: continue
-        ts = tileset_for(name, tiledefs, scripts[(x, y)], [sc for k, v in scripts.items() if k != (x, y) for sc in v])
+        ts = tileset_for(name, tiledefs, scripts[(x, y)], list(remembered) + [sc for k, v in scripts.items() if k != (x, y) for sc in v])
         if (name, getattr(lv, "version", 0), id(ts)) not in _level_img: level_image(name, lv, ts); return True
-    return False
+    _prebuild_done["sig"] = sig; return False
 
-def build_world_image(levels, npcs, weapons, gmap_name, cur_level, radius=1):
+def build_world_image(levels, npcs, weapons, gmap_name, cur_level, radius=1, remembered=()):
     """Stitch the tiles of the current sub-level and its neighbours. Returns (image, origin_px_of_cur_level, cell_of_cur)."""
     rows = read_gmap(gmap_name); pos = {n: (x, y) for y, r in enumerate(rows) for x, n in enumerate(r)}
     cx, cy = pos[cur_level]
@@ -168,7 +197,7 @@ def build_world_image(levels, npcs, weapons, gmap_name, cur_level, radius=1):
             if not (0 <= y < len(rows) and 0 <= x < len(rows[0])): continue
             name = rows[y][x]; lv = levels.get(name)
             if not lv or not lv.board: continue
-            ts = tileset_for(name, tiledefs, scripts[(x, y)], [sc for k, v in scripts.items() if k != (x, y) for sc in v])
+            ts = tileset_for(name, tiledefs, scripts[(x, y)], list(remembered) + [sc for k, v in scripts.items() if k != (x, y) for sc in v])
             world.paste(level_image(name, lv, ts), ((dx + radius) * 1024, (dy + radius) * 1024))
             _world_cache.setdefault("pending", {})[name] = ((dx + radius) * 1024, (dy + radius) * 1024, ts)
     return world, (radius * 1024, radius * 1024), (cx, cy)
@@ -180,6 +209,8 @@ from PIL import ImageChops
 def _scaled(im, z):
     if abs(z - 1.0) < 1e-3: return im
     return im.resize((max(1, int(im.width * z)), max(1, int(im.height * z))), Image.NEAREST)
+
+_npc_img_cache, _light_cache = {}, {}
 
 def _tint(im, color):
     r, g, b, a = color; im = im.convert("RGBA")
@@ -214,13 +245,31 @@ def draw_character(canvas, gani_name, direction, props, x, y, t=0.0):
 
 PART_KIND = {"HEAD": "heads", "BODY": "bodies", "SWORD": "swords", "SHIELD": "shields"}   # gani sprite source -> folder of the world
 
+_hard_alpha = {}
+
 def _paste_clipped(canvas, im, x, y):
-    """Alpha-composite `im` at (x, y), only the part that lies inside the canvas (no full-size temporary layer)."""
+    """Alpha-composite `im` at (x, y), only the part that lies inside the canvas (no full-size temporary layer). A picture whose pixels are all
+    either fully see-through or fully solid (most GIFs) is pasted through its own alpha as a mask instead: one call, about twice as fast, and
+    the same pixels in every channel. Pictures with partly see-through pixels go through alpha_composite as before."""
     cw, ch = canvas.size; w, h = im.size
     x0, y0, x1, y1 = max(0, x), max(0, y), min(cw, x + w), min(ch, y + h)
     if x1 <= x0 or y1 <= y0: return
     if im.mode != "RGBA": im = im.convert("RGBA")
-    canvas.alpha_composite(im.crop((x0 - x, y0 - y, x1 - x, y1 - y)), (x0, y0))
+    hard = _hard_alpha.get(id(im))
+    if hard is None or hard[0] is not im:
+        hist = im.getchannel("A").histogram(); hard = (im, sum(hist[1:255]) == 0)
+        if len(_hard_alpha) > 2000: _hard_alpha.clear()
+        _hard_alpha[id(im)] = hard
+    if hard[1]: canvas.paste(im, (x, y), im)
+    else: canvas.alpha_composite(im.crop((x0 - x, y0 - y, x1 - x, y1 - y)), (x0, y0))
+
+def _light_tint(color):
+    """setcoloreffect r,g,b,a of a picture drawn as light (seteffectmode 0, see-through): adding colour*alpha to what is under it is drawn as a blend
+    towards the picture's colour scaled to full strength, with the alpha scaled down to match. Over a dark ground that is the same as adding; over a
+    bright one a little weaker. It is an ordinary tint, so it is worked out once per picture and not on every frame (the smoke is drawn every frame)."""
+    r, g, b, a = color; k = max(r, g, b)
+    if k <= 0: return (0, 0, 0, 0)
+    return (r / k, g / k, b / k, min(1.0, a * k))
 
 from PIL import ImageDraw, ImageFont
 _font = None
@@ -253,6 +302,39 @@ def item_sprite(t):
         _item_cache[t] = im
     return _item_cache[t]
 
+_npc_reach = {"t": 0.0}
+
+def _reach(fx, n, dx, dy):
+    """How far (px) from its X2/Y2 an NPC can draw anything: its picture (zoomed), how far its script moved it, its showimg lights. Lets
+    render_scene skip NPCs far off screen without running their effects: a gmap such as portwolfe has over a thousand NPCs."""
+    r = 64 + abs(dx) + abs(dy)
+    name = fx.image; im = load_image(name) if name and name not in ("-", "#c#") else None
+    if im is not None: r += max(im.size) * max(1.0, fx.zoom)
+    for idx, s_ in fx.shows.items():
+        if idx >= 200 or "em" in s_: return 10 ** 9   # screen-space pictures and particle emitters: always looked at (as before)
+        try: r = max(r, 64 + abs(s_["x"] * 16 - n["X2"]) + abs(s_["y"] * 16 - n["Y2"]) + 512)
+        except (KeyError, TypeError): r = 1024
+    return min(1024, int(r))
+
+_cand = {"key": None}
+CAND_SLACK = 256
+
+def _candidates(npcs, gmap, cur, cx, cy, ox, oy, camx, camy, size, now, rev=None):
+    """The NPCs that can be near the view: the coarse test of render_scene with CAND_SLACK px to spare, worked out again only when the camera has
+    moved more than that, the NPCs changed, or a second has passed. A gmap has a thousand NPCs and the phone spent milliseconds a frame just
+    looking at each of them; render_scene still makes its own exact test for every one returned."""
+    wx, wy = cx * 1024 + camx - ox, cy * 1024 + camy - oy   # the camera in whole-map pixels
+    key = (id(npcs), len(npcs), rev, gmap, cur, size)   # rev: the session's count of NPCs added, removed or given a new script
+    c = _cand
+    if c["key"] == key and abs(wx - c["x"]) < CAND_SLACK and abs(wy - c["y"]) < CAND_SLACK and 0 <= now - c["t"] < 1.0: return c["list"]
+    out = []
+    for nid, n in npcs.items():
+        if "X2" not in n or (gmap and "GMAPLEVELX" not in n): continue
+        m = _npc_reach.get(nid, 1024) + CAND_SLACK
+        gx = ox + (n.get("GMAPLEVELX", cx) - cx) * 1024 + n["X2"] - camx; gy = oy + (n.get("GMAPLEVELY", cy) - cy) * 1024 + n["Y2"] - camy
+        if -m < gx < size[0] + m and -m < gy < size[1] + m: out.append(nid)   # the id only: an NPC can be replaced under the same id
+    c.update(key=key, x=wx, y=wy, t=now, list=out); return out
+
 def _on_screen(fx, n, x, y, size):
     """Does any part of the NPC's picture fall inside the view? Its position is the picture's top-left corner, and pictures such as a ship or a
     tree are several hundred pixels big: a fixed margin made them vanish while most of them was still on screen."""
@@ -280,7 +362,8 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
     levels, npcs, weapons, me = snap["levels"], snap["npcs"], snap["weapons"], snap["me"]
     gmap, cur = snap["gmap"], snap["level"]
     if gmap and cur not in {n for r in read_gmap(gmap) for n in r}: gmap = None
-    tdsig = (len(weapons.get("TileDefs", b"")), sum(len(n.get("SCRIPT", "")) for n in npcs.values()), tuple(sorted(snap.get("adjacent", []))) if not gmap else ())
+    remembered = snap.get("tiledef_memory") or ()   # prefixed tiledefs of levels we were in before (gclient._remember_tiledefs)
+    tdsig = (len(remembered), len(weapons.get("TileDefs", b"")), (snap["npc_rev"] if "npc_rev" in snap else sum(len(n.get("SCRIPT", "")) for n in npcs.values())), tuple(sorted(snap.get("adjacent", []))) if not gmap else ())
     key = (gmap, cur, tuple(sorted((n, getattr(l, "version", 0)) for n, l in levels.items() if l.board)), len(npcs), tdsig)
     if _world_cache.get("key") == key:
         world, (ox, oy), (cx, cy) = _world_cache["val"]
@@ -290,15 +373,15 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
                 world.paste(level_image(name, lv, ts_), (px_, py_)); _world_cache["versions"][name] = getattr(lv, "version", 0)
     else:
         if gmap:
-            world, (ox, oy), (cx, cy) = build_world_image(levels, npcs, weapons, gmap, cur, radius)
+            world, (ox, oy), (cx, cy) = build_world_image(levels, npcs, weapons, gmap, cur, radius, remembered)
         else:
             scripts = [n["SCRIPT"] for n in npcs.values() if n.get("SCRIPT")]
             tdefs = weapons.get("TileDefs", b"").replace(b"\xa7", b"\n").decode("latin1")
-            lv = levels[cur]; ts = tileset_for(cur, tdefs, scripts)
+            lv = levels[cur]; ts = tileset_for(cur, tdefs, scripts, remembered)
             world = Image.new("RGBA", (3072, 3072), (0, 0, 0, 255))
             for nname, nox, noy in snap.get("adjacent", []):
                 nlv = levels.get(nname)
-                if nlv and nlv.board: world.paste(level_image(nname, nlv, tileset_for(nname, tdefs, [], scripts)), (1024 + int(nox * 16), 1024 + int(noy * 16)))
+                if nlv and nlv.board: world.paste(level_image(nname, nlv, tileset_for(nname, tdefs, [], list(remembered) + scripts)), (1024 + int(nox * 16), 1024 + int(noy * 16)))
             world.paste(level_image(cur, lv, ts), (1024, 1024))
             ox = oy = 1024; first = next(iter(npcs.values()), {}); cx, cy = first.get("GMAPLEVELX", 0), first.get("GMAPLEVELY", 0)
         places = _world_cache.pop("pending", {})
@@ -310,12 +393,16 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
     camx = ox + px + cam_offset[0] - size[0] // 2; camy = oy + py + cam_offset[1] - (size[1] // 2)
     if snap.get("focus"): camx = ox + snap["focus"][0] - cx * 1024 - size[0] // 2; camy = oy + snap["focus"][1] - cy * 1024 - size[1] // 2
     view = world.crop((camx, camy, camx + size[0], camy + size[1]))
-    under, normal, over, lights = [], [], [], []
-    for nid, n in npcs.items():
-        if "X2" not in n or (gmap and "GMAPLEVELX" not in n): continue
+    under, normal, over, lights, with_shows = [], [], [], [], []
+    now_ = time.monotonic()
+    if now_ - _npc_reach["t"] > 1.0: _npc_reach.clear(); _npc_reach["t"] = now_   # looked at again every second (pictures and scripts change)
+    for nid in _candidates(npcs, gmap, cur, cx, cy, ox, oy, camx, camy, size, now_, snap.get("npc_rev")):
+        n = npcs.get(nid)
+        if n is None or "X2" not in n or (gmap and "GMAPLEVELX" not in n): continue
         ncx, ncy = n.get("GMAPLEVELX", cx), n.get("GMAPLEVELY", cy)
         gx = ox + (ncx - cx) * 1024 + n["X2"] - camx; gy = oy + (ncy - cy) * 1024 + n["Y2"] - camy
-        if not (-1024 < gx < size[0] + 1024 and -1024 < gy < size[1] + 1024): continue   # coarse; pictures and lights are checked one by one below
+        m = _npc_reach.get(nid, 1024)   # coarse; pictures and lights are checked one by one below
+        if not (-m < gx < size[0] + m and -m < gy < size[1] + m): continue
         if snap.get("fx"): fx = snap["fx"](nid, n)
         else:
             fkey = (nid, n.get("SCRIPT", ""), n.get("IMAGE", ""), n["X2"], n["Y2"])
@@ -323,6 +410,8 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
             if fx is None: fx = _fx_cache[fkey] = gs1.run(n.get("SCRIPT", ""), n.get("IMAGE", ""), n["X2"] / 16, n["Y2"] / 16)
         if fx.hidden or not n.get("VISFLAGS", 1) & 1: pass
         dx, dy = (fx.x - n["X2"] / 16) * 16, (fx.y - n["Y2"] / 16) * 16
+        if nid not in _npc_reach: _npc_reach[nid] = _reach(fx, n, dx, dy)
+        if fx.shows: with_shows.append((nid, n, fx))
         for k, s_ in fx.shows.items():
             lights.append((gx + (s_["x"] - n["X2"] / 16) * 16, gy + (s_["y"] - n["Y2"] / 16) * 16, s_))
         if not _on_screen(fx, n, gx + dx, gy + dy, size): continue
@@ -336,17 +425,26 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
         if not name or name in ("-", "#c#") or fx.hidden: return
         im = load_image(name)
         if im is None: return
-        part = n.get("IMAGEPART")
-        if fx.imgpart: _, a, b, c, d = fx.imgpart; im = im.crop((a, b, a + c, b + d))
-        elif part and part["w"] and part["h"]: im = im.crop((part["x"], part["y"], part["x"] + part["w"], part["y"] + part["h"]))
-        if fx.color: im = _tint(im, fx.color)
+        part = n.get("IMAGEPART"); box = None
+        if fx.imgpart: _, a, b, c, d = fx.imgpart; box = (a, b, a + c, b + d)
+        elif part and part["w"] and part["h"]: box = (part["x"], part["y"], part["x"] + part["w"], part["y"] + part["h"])
+        # seteffectmode: 0 = as light (the default), 1 = as transparency, 2 = holes. The mode only matters for a see-through picture (setcoloreffect
+        # alpha below 1): lights, fire, window glow and smoke (val_smoke-ambience .1,.1,.1,.95 is a faint white haze, not a black cloud) are added
+        # to what is under them; mode 1 (shadows, water) is ordinary transparency. Mode 2 is drawn as transparency too (no darkness to cut holes in).
+        color = fx.color
+        if color and fx.mode == 0 and color[3] < 1: color = _light_tint(color)
         gx, gy = it["gx"], it["gy"]
-        if fx.zoom != 1.0:
-            w0, h0 = im.size; im = _scaled(im, fx.zoom); gx -= (im.width - w0) / 2; gy -= (im.height - h0) / 2
-        if fx.mode == 1:
-            lay = Image.new("RGBA", view.size, (0, 0, 0, 0)); _paste_clipped(lay, im, int(gx), int(gy))
-            view.paste(ImageChops.add(view.convert("RGB"), lay.convert("RGB")).convert("RGBA"), (0, 0), lay.split()[3])
-        else: _paste_clipped(view, im, int(gx), int(gy))
+        if box or color or fx.zoom != 1.0:
+            key = (name, id(im), box, tuple(color) if color else None, fx.zoom); got = _npc_img_cache.get(key)
+            if got is None:
+                got = im.crop(box) if box else im
+                if color: got = _tint(got, color)
+                got = _scaled(got, fx.zoom)
+                if len(_npc_img_cache) > 400: _npc_img_cache.clear()
+                _npc_img_cache[key] = got
+            w0, h0 = (box[2] - box[0], box[3] - box[1]) if box else im.size
+            im = got; gx -= (im.width - w0) / 2; gy -= (im.height - h0) / 2
+        _paste_clipped(view, im, int(gx), int(gy))
     for it in sorted(under, key=lambda i: i["key"]): draw_npc(it)
     for item in snap.get("items", []):
         sp = item_sprite(item["type"])
@@ -367,7 +465,6 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
         dr.ellipse((sx - rad, sy - rad, sx + rad, sy + rad), fill=(255, 120, 20, int(170 * (1 - f))), outline=(255, 230, 120, int(255 * (1 - f))), width=3)
         dr.ellipse((sx - rad // 2, sy - rad // 2, sx + rad // 2, sy + rad // 2), fill=(255, 230, 120, int(200 * (1 - f))))
         view.alpha_composite(lay)
-    chars = []
     me_item = dict(key=py + oy - camy + 32, me=True)
     def nkey(i):
         fx = i["fx"]
@@ -424,25 +521,29 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
         for gx, gy, s in lights:
             im = load_image(s["image"])
             if im is None or not _light_on_screen(im, s, gx, gy, size): continue
-            im = _scaled(im, s["zoom"]); col = s["color"] or (1, 1, 1, 1)
-            if s.get("rot"): im = im.rotate(-math.degrees(s["rot"]), expand=True, resample=Image.BICUBIC)
-            r, g, b, a = col; R, G, B, A = im.convert("RGBA").split()
-            if s.get("normal"):
-                w0, h0 = load_image(s["image"]).size; lay = Image.merge("RGBA", (R.point(lambda v: int(v * r)), G.point(lambda v: int(v * g)), B.point(lambda v: int(v * b)), A.point(lambda v: int(v * a))))
-                _paste_clipped(view, lay, int(gx - (im.width - w0) / 2), int(gy - (im.height - h0) / 2)); continue
-            def lit(c, m, A=A, a=a): return ImageChops.multiply(c, A).point(lambda v: int(min(255, v * m * a)))
-            tinted = Image.merge("RGB", (lit(R, r), lit(G, g), lit(B, b)))
+            col = tuple(s["color"] or (1, 1, 1, 1)); lkey = (s["image"], id(im), s["zoom"], s.get("rot"), col, bool(s.get("normal"))); got = _light_cache.get(lkey)
+            if got is None:
+                im = _scaled(im, s["zoom"])
+                if s.get("rot"): im = im.rotate(-math.degrees(s["rot"]), expand=True, resample=Image.BICUBIC)
+                r, g, b, a = col; R, G, B, A = im.convert("RGBA").split()
+                if s.get("normal"): got = Image.merge("RGBA", (R.point(lambda v: int(v * r)), G.point(lambda v: int(v * g)), B.point(lambda v: int(v * b)), A.point(lambda v: int(v * a))))
+                else:
+                    def lit(c, m, A=A, a=a): return ImageChops.multiply(c, A).point(lambda v: int(min(255, v * m * a)))
+                    got = Image.merge("RGB", (lit(R, r), lit(G, g), lit(B, b)))
+                if len(_light_cache) > 200: _light_cache.clear()
+                _light_cache[lkey] = got
             w0, h0 = load_image(s["image"]).size
+            if s.get("normal"):
+                _paste_clipped(view, got, int(gx - (got.width - w0) / 2), int(gy - (got.height - h0) / 2)); continue
+            tinted = got; im = got
             ax, ay = int(gx - (im.width - w0) / 2), int(gy - (im.height - h0) / 2)
             x0, y0, x1, y1 = max(0, ax), max(0, ay), min(view.width, ax + tinted.width), min(view.height, ay + tinted.height)
             if x1 <= x0 or y1 <= y0: continue
             region = view.crop((x0, y0, x1, y1)); rgb = ImageChops.add(region.convert("RGB"), tinted.crop((x0 - ax, y0 - ay, x1 - ax, y1 - ay)))
             view.paste(Image.merge("RGBA", (*rgb.split(), region.split()[3])), (x0, y0))
     drawn = 0; add_layer = None
-    for nid, n in npcs.items():
-        if "X2" not in n or (gmap and "GMAPLEVELX" not in n): continue
-        fx = snap["fx"](nid, n) if snap.get("fx") else None
-        for idx, sh in (fx.shows.items() if fx else ()):
+    for nid, n, fx in with_shows:   # the NPCs the loop above looked at that show something (it used to ask every NPC of the gmap again here)
+        for idx, sh in fx.shows.items():
             em = sh.get("em")
             for p in (em.particles if em else ()):
                 if drawn > 600: break

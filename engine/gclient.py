@@ -1,11 +1,11 @@
 """Graal client session: logs in, keeps a model of the world (levels, NPCs, players, chat) and sends actions."""
-import collections, math, os, random, re, socket, sys, time
+import math, os, random, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from graalproto import *
 import leveldoc
 from props import parse_npc, parse_player, Reader
 import enums
-from minclient import Conn, list_servers, VERSIONS
+from minclient import Conn, VERSIONS
 
 
 class Level:
@@ -127,13 +127,26 @@ class Session:
         if not new_key or new_key == old: return
         if getattr(self, "_loop_from_level", False) and getattr(self, "audio", None):   # the waves of portwolfe followed the player onto the worldmap
             self.audio.stop_loop(); self._loop_from_level = False
+        self._remember_tiledefs(self.npcs)
         stash = self.__dict__.setdefault("_npc_stash", {})
         if old: stash[old] = self.npcs
         while len(stash) > 8: stash.pop(next(iter(stash)))
-        self.npcs = stash.pop(new_key, {}); self.items = []; self.horses = []
+        self.npcs = stash.pop(new_key, {}); self.items = []; self.horses = []; self.npc_rev = getattr(self, "npc_rev", 0) + 1
         self.__dict__.pop("_adj_memo", None)
         try: import render; render._world_cache.clear(); render._fx_cache.clear()
         except Exception: pass
+
+    _PREFIX_TILEDEF = re.compile(r"\baddtiledef2?\s+[^,;{}\n]+,\s*(?!\s|#L)[^,;{}\n]+,[^;{}\n]*")
+
+    def _remember_tiledefs(self, npcs):
+        """Keep the `addtiledef` lines with a level-name prefix (not #L) of the world we leave: in Graal they stay registered when you walk on. portwolfe_a1 registers
+        `addtiledef2 ...,portwolfe_,...` for every portwolfe_ level, and portwolfe_alley2 has no tiledefs of its own: without this it was drawn with the plain tileset.
+        removetiledefs lines are not kept, so a level that clears its own tiles cannot wipe out the TileDefs weapon in other levels."""
+        mem = self.__dict__.setdefault("tiledef_memory", {})
+        for n in npcs.values():
+            lines = self._PREFIX_TILEDEF.findall(n.get("SCRIPT") or "")
+            if lines: mem.setdefault(";\n".join(lines) + ";", None)
+        while len(mem) > 300: mem.pop(next(iter(mem)))
 
     def safe_handle(self, kind, pid, payload):
         """`handle`, but a packet we cannot digest (a prop we do not know, a bug) is logged instead of ending the session."""
@@ -180,12 +193,17 @@ class Session:
         elif pid == 3:
             try: nid, props = parse_npc(payload)
             except ValueError as e:   # an unknown prop, or the packet ends inside one: keep what was read before it, and log the whole packet
-                if getattr(e, "partial", None) and hasattr(e, "npc_id"): self.npcs.setdefault(e.npc_id, {}).update(e.partial)
+                if getattr(e, "partial", None) and hasattr(e, "npc_id"):
+                    self.npcs.setdefault(e.npc_id, {}).update(e.partial)
+                    if "SCRIPT" in e.partial: self.npc_rev = getattr(self, "npc_rev", 0) + 1
                 self.log.append(f"npc parse: {e}")
                 if len(self.log) < 400:
                     try: import crashguard; crashguard.note(f"npc props {e} ({len(payload)} bytes) {bytes(payload[:2048])!r}")
                     except Exception: pass
-            else: self.npcs.setdefault(nid, {}).update(props)
+            else:
+                if nid not in self.npcs: self.npc_rev = getattr(self, "npc_rev", 0) + 1
+                self.npcs.setdefault(nid, {}).update(props)
+                if "SCRIPT" in props: self.npc_rev = getattr(self, "npc_rev", 0) + 1   # render's world cache key (instead of summing all scripts every frame)
         elif pid == 33:
             try:
                 r = Reader(payload); name = r.gstr(); r.byte(); image = r.gstr(); r.byte(); script = r.raw(r.num(2)).replace(b"\xa7", b"\n").decode("latin1")
@@ -204,10 +222,10 @@ class Session:
         elif pid == 46 and len(payload) >= 5:
             hx, hy = ((payload[3] - 0x20) / 2) * 16, ((payload[4] - 0x20) / 2) * 16; cx_, cy_ = self.cell if self.gmap else (0, 0); hx += cx_ * 1024; hy += cy_ * 1024
             self.hit_npcs("washit", lambda q: q[0] <= hx < q[0] + q[2] and q[1] <= hy < q[1] + q[3])
-        elif pid == 29 and len(payload) >= 3: self.npcs.pop(gint(payload[:3]), None)
+        elif pid == 29 and len(payload) >= 3: self.npcs.pop(gint(payload[:3]), None); self.npc_rev = getattr(self, "npc_rev", 0) + 1
         elif pid == 150 and len(payload) >= 4:
             ln = payload[0] - 0x20
-            if len(payload) >= 1 + ln + 3 and payload[1:1 + ln].decode("latin1") == self.level_name: self.npcs.pop(gint(payload[1 + ln:4 + ln]), None)
+            if len(payload) >= 1 + ln + 3 and payload[1:1 + ln].decode("latin1") == self.level_name: self.npcs.pop(gint(payload[1 + ln:4 + ln]), None); self.npc_rev = getattr(self, "npc_rev", 0) + 1
         elif pid == 40 and len(payload) >= 5: self.hurt_by_server((payload[2] - 0x20) - 64, (payload[3] - 0x20) - 64, payload[4] - 0x20)
         elif pid == 11 and len(payload) >= 5:
             self.bombs.put((payload[2] - 0x20) / 2, (payload[3] - 0x20) / 2, payload[4] - 0x20, send=False, remote=True)
@@ -240,7 +258,8 @@ class Session:
         elif pid == 48 and len(payload) >= 7:
             fromp, npc, x, y = gint(payload[:2]), gint(payload[2:5]), (payload[5] - 0x20) / 2, (payload[6] - 0x20) / 2
             items = csv_split(payload[7:].decode("latin1")); self.actions.append((fromp, npc, x, y, items))
-            if len(items) >= 3 and items[0].lower() == "clientside":
+            if len(items) >= 3 and items[0].lower() == "clientside" and items[1].lower() == "-guilds": self._guild_reply(items[2:])   # the server's gr.guild answers
+            elif len(items) >= 3 and items[0].lower() == "clientside":
                 self.runner.broadcast("action" + items[2].lower(), params=items[3:], only=items[1])
             elif items: self.runner.broadcast("action" + items[0].lower(), params=items[1:])
         elif pid == 37 and self._map_players_reply(payload): pass
@@ -975,7 +994,7 @@ class Session:
         items = [dict(type=i["type"], x=i["x"], y=i["y"], cx=i["cell"][0], cy=i["cell"][1]) for i in self.items]
         return dict(levels=self.levels, npcs=self.npcs, weapons=self.weapons, me=me, gmap=self.gmap, level=self.level_name,
                     players=dict(self.players), items=items, imgs=dict(self.imgs), effect=self.effect, texts=dict(self.texts), polys=dict(self.polys),
-                    sign=self.sign[0] if time.time() < self.sign[1] else "", fx=self.npcrt.fx, horses=list(self.horses), hud_hidden=self.hud_hidden, adjacent=self.adjacent_levels(), projectiles=self.proj.view(), focus=getattr(self, "focus", None), bombfx=self.bombs.view())
+                    sign=self.sign[0] if time.time() < self.sign[1] else "", fx=self.npcrt.fx, horses=list(self.horses), hud_hidden=self.hud_hidden, adjacent=self.adjacent_levels(), projectiles=self.proj.view(), focus=getattr(self, "focus", None), bombfx=self.bombs.view(), tiledef_memory=list(self.__dict__.get("tiledef_memory", ())), npc_rev=getattr(self, "npc_rev", 0))
 
     def level_meta(self, name):
         """gs2emu with an NPC-server keeps links and signs to itself (it warps you and shows the signs), so the client never hears of them. They are in the level file:
@@ -1042,7 +1061,7 @@ class Session:
 
     def step_cell(self):
         """gmap: when walking over a sub-level edge, wrap local x/y and tell the server the new cell (props 43/44)."""
-        x, y = self.pos; cx, cy = self.cell; out = b""; moved = False
+        x, y = self.pos; cx, cy = self.cell; moved = False
         if self._next_cell(x, y) is None: return False
         if x < 0: cx -= 1; x += 1024; moved = True
         elif x >= 1024: cx += 1; x -= 1024; moved = True
@@ -1078,12 +1097,16 @@ class Session:
 
     def gmap_rows(self):
         if not self.gmap: return None
-        import assets, render
+        import render
         return render.read_gmap(self.gmap)
 
 
     def poll(self):
         """Read whatever the server has sent without waiting, update the model, send heartbeats."""
+        if not getattr(self, "_guild_asked", False) and self.level_name:   # once after login: which guilds are we in (for #g and the guild window)
+            self._guild_asked = True
+            try: self.guild_cmd("info")
+            except (OSError, AttributeError): self._guild_asked = False
         sock = self.conn.sock; sock.setblocking(False)
         try:
             while True:
@@ -1627,6 +1650,63 @@ class Session:
         if time.time() - self.gani_start >= ganimod.duration(g) and time.time() >= self.weapon_ani_until:
             self.play_gani(g.setbackto or "idle")
 
+
+    # ---- guilds: membership and ranks live on the server (guilds/guild<Name>.txt, ranks as "#leader Account" / "#officer Account" lines);
+    # the gr.guild trigger commands of the patched gs2emu check every change. The client only shows them and asks.
+    GUILD_RANKS = ("member", "officer", "leader")
+
+    def guild_cmd(self, *args):
+        """Ask the server: guild_cmd("info"), ("add", guild, account), ("remove", guild, account), ("leave", guild), ("rank", guild, account, "officer")."""
+        self.send_triggeraction(0, 0, 0, ["gr.guild"] + [str(a) for a in args])
+
+    def _guild_reply(self, fields):
+        """clientside,-Guilds,info,<n>,{name,myrank,count,{account,rank,nickname}...}... or clientside,-Guilds,message,<text>.
+        nickname: the one name the account may wear with the tag ("" = any name)."""
+        kind = fields[0].lower() if fields else ""
+        if kind == "message" and len(fields) > 1: self.guild_message = (fields[1], time.time())
+        elif kind == "info":
+            out, i = [], 2
+            try:
+                for _ in range(int(fields[1])):
+                    name, rank, n = fields[i], int(fields[i + 1]), int(fields[i + 2]); i += 3
+                    members = [(fields[i + 3 * k], int(fields[i + 3 * k + 1]), fields[i + 3 * k + 2]) for k in range(n)]; i += 3 * n
+                    out.append(dict(name=name, rank=rank, members=sorted(members, key=lambda m: (-m[1], m[0].lower()))))
+            except (IndexError, ValueError): pass   # keep what was read
+            self.guilds = out
+
+    @property
+    def guild(self):
+        """The guild tag of our nickname, but only when the server lists us in that guild (#g in scripts, so a gate opens only for real members)."""
+        forced = self.__dict__.get("_guild_forced")
+        if forced is not None: return forced   # offline play and tests set it directly (no server to ask)
+        nick = str(self.me.get("NICKNAME") or "")
+        m = re.search(r"\(([^()]*)\)\s*$", nick)
+        if not m: return ""
+        tag = m.group(1).strip()
+        return tag if any(g["name"].lower() == tag.lower() for g in getattr(self, "guilds", ())) else ""
+
+    @guild.setter
+    def guild(self, value): self._guild_forced = value
+
+    def nick_base(self):
+        """Our nickname without the (guild) tag."""
+        return re.sub(r"\s*\([^()]*\)\s*$", "", str(self.me.get("NICKNAME") or "")).strip() or str(getattr(self, "account_name", "") or "unknown")
+
+    def guild_name_for(self, guild_name):
+        """The name the guild gave our account ("Sir Patrick Graham, Knight of"), or "" when any name may wear its tag."""
+        me = str(getattr(self, "account_name", "") or "").lower()
+        for g in getattr(self, "guilds", ()):
+            if g["name"].lower() == guild_name.lower():
+                for m in g["members"]:
+                    if m[0].lower() == me: return m[2] if len(m) > 2 else ""
+        return ""
+
+    def set_guild_tag(self, guild_name):
+        """Wear the tag of a guild (or none with ""): the server's own setnick chat command, which checks the guild file and answers with the nickname.
+        A guild that gave our account a name gets that name with the tag (the server allows no other)."""
+        nick = (self.guild_name_for(guild_name) or self.nick_base()) + (f" ({guild_name})" if guild_name else "")
+        self.send(gline(2, gchar(12) + gstr(("setnick " + nick).encode("latin1", "replace")[:223])))   # not shown as our chat bubble
+        self.guild_message = ("Asked for: " + nick, time.time())
 
     def send_triggeraction(self, npc_id, x, y, items):
         """PLI_TRIGGERACTION (38): {GINT3 npc}{GCHAR x*2}{GCHAR y*2}{CSV action,param,...}; the server routes it (NPC-server events, gr.* hacks)."""

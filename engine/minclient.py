@@ -69,9 +69,9 @@ def list_servers_full(host, port, account, password, verbose):
     c = Conn(host, port)
     c.send(listserver_hello(c.seed))
     c.send(listserver_login(account, password))
-    infos, notes = [], []
+    infos, notes = [], []; lp = LineParser()   # a line can go on in the next frame
     for t, plain in c.frames(3):
-        for pid, payload in split_lines(plain):
+        for _, pid, payload in lp.feed(plain):
             if verbose: print(f"  list S>C id={pid} {payload[:70]!r}")
             if pid == 0: infos += parse_server_entry(payload)
             else: notes.append((pid, payload))

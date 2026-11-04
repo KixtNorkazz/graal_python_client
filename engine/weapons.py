@@ -199,6 +199,19 @@ class _Arr(list):
         except (TypeError, ValueError): return 0.0
         return list.__getitem__(self, i) if 0 <= i < len(self) else 0.0
 
+class _M:
+    """A word standing in for a regex match (evaluate's word() hands parts of a-b-c names to ident())."""
+    def __init__(self, w): self.w = w
+    def group(self, k=0): return self.w
+
+class _T(dict):
+    """this.* variables in an expression: unknown ones read as 0, lists as GS1 arrays. (Module level: evaluate runs over 100 times a frame on a
+    gmap, and defining the two classes inside it on every call cost about 1 ms a frame.)"""
+    def __missing__(self, k): return _Zero(0.0)
+    def __getitem__(self, k):
+        v = dict.__getitem__(self, k) if k in self else _Zero(0.0)
+        return _Arr(v) if isinstance(v, list) else v
+
 _CODE = {}
 
 def evaluate(expr, ctx):
@@ -256,9 +269,6 @@ def evaluate(expr, ctx):
         if re.search(r"\.(png|gif|mng|gani|wav|txt|nw)$", w, re.I): return repr(w)
         if "." in w: return "0.0"
         return repr(w) if re.search(r"[A-Za-z]", w) else w
-    class _M:
-        def __init__(self, w): self.w = w
-        def group(self, k=0): return self.w
     def word(m):
         w = m.group(0)
         if "-" in w and not re.search(r"\.(png|gif|mng|gani|wav|txt|nw)$", w, re.I):
@@ -282,11 +292,6 @@ def evaluate(expr, ctx):
            "getangle": lambda vx, vy: math.atan2(-to_float(vy), to_float(vx)) % (2 * math.pi),
            "strequals": lambda a, b: str(a).lower() == str(b).lower(), "startswith": lambda a, b: str(b).lower().startswith(str(a).lower()),
            "random": lambda a=0, b=1: (_RNG.uniform(to_float(a), to_float(b)) if REAL_RANDOM else (to_float(a) + to_float(b)) / 2)}
-    class _T(dict):
-        def __missing__(self, k): return _Zero(0.0)
-        def __getitem__(self, k):
-            v = dict.__getitem__(self, k) if k in self else _Zero(0.0)
-            return _Arr(v) if isinstance(v, list) else v
     env["T"] = _T(ctx.w.this); env["keycode"] = _keycode; env["strreplace"] = lambda a, b, c: str(a).strip("'\"").replace(str(b).strip("'\""), str(c).strip("'\"")); env["strcontains"] = lambda a, b: str(b).lower() in str(a).lower(); env["onwater"] = lambda x, y: _water(ctx, x, y); env["keydown2"] = lambda k, f=1: 1.0 if ctx.s.input.vk_is_down(to_float(k)) else 0.0; env["tiles_"] = lambda x, y: float(_tile_at(ctx, x, y)); env["arraylen"] = lambda a: float(len(a)) if isinstance(a, list) else 0.0
     env["_pow_"] = lambda a, b: safeexpr.safe_pow(to_float(a), to_float(b)); env["_mul_"] = lambda a, b: safeexpr.safe_mul(to_float(a), to_float(b))
     code = _CODE.get(e, 0)

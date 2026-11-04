@@ -2,7 +2,6 @@
 The runtimes (weapons.WeaponRunner, npcrt.NpcRuntime) keep `(due_time, gen)` tuples and call `next(gen)`; GenRunner makes that work for
 generators that yield either a delay in seconds or a Wait: for a Wait it returns the timeout as the delay and registers itself with the GUI
 event registry, so an event (a button click) can wake it early; the value sent back into the script is 1 (event) or 0 (timeout)."""
-import time
 
 NO_TIMEOUT = 86400.0
 

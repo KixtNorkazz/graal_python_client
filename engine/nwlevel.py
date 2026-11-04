@@ -1,5 +1,4 @@
 """GLEVNW01 (.nw) level reader: BOARD rows (2 base64 chars per tile), LINK, NPC blocks, SIGN."""
-import re
 
 _B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 _IDX = {c: i for i, c in enumerate(_B64)}

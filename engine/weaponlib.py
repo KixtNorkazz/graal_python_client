@@ -1,5 +1,5 @@
 """Library of weapon files (GRAWP001 containers) from the RP server backup, for `addweapon("name")` of the local NPC server."""
-import glob, os, re
+import glob, re
 import config
 
 DIRS = config.dirs("weapon_dirs")

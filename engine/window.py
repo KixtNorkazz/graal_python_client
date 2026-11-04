@@ -54,6 +54,7 @@ class Window:
         L.SDL_GetWindowPosition.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
         L.SDL_SetWindowPosition.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
         L.SDL_GetWindowID.argtypes = [ctypes.c_void_p]; L.SDL_GetWindowID.restype = ctypes.c_uint32
+        L.SDL_SetWindowFullscreen.argtypes = [ctypes.c_void_p, ctypes.c_uint32]   # without it a 64-bit window pointer is passed as a 32-bit int (F11 crashed on Windows)
         L.SDL_DestroyWindow.argtypes = [ctypes.c_void_p]; L.SDL_DestroyRenderer.argtypes = [ctypes.c_void_p]; L.SDL_DestroyTexture.argtypes = [ctypes.c_void_p]
         if L.SDL_Init(SDL_INIT_VIDEO) != 0: raise RuntimeError("SDL_Init: " + L.SDL_GetError().decode())
         self.w, self.h = w, h

@@ -1,6 +1,5 @@
 """Client-side collision: tile types (gs2emu tables) of the loaded sub-levels plus NPC shapes from `setshape`/`setshape2`.
 Player blocking box = 16x16 px at (x+16, y+32), the player's feet (gs2emu uses the same reference point x+1.5, y+2 tiles)."""
-import gs1
 from tiletypes import TYPE0
 
 BLOCKING = (20, 21, 22)

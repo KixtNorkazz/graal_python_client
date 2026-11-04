@@ -2,6 +2,7 @@
 
 Each level is one 64 x 64 picture (one pixel per tile, the average colour of the tile). The level files come from the local folders or are fetched from the
 game server one by one while the map is open. Players are placed from what the server told us about them: the level they are in and their position in it."""
+import uitext
 import hashlib, os, time
 from PIL import Image, ImageDraw
 import assets, nwlevel, render, window
@@ -106,7 +107,7 @@ class WorldMap:
         w, h = canvas.size; d = ImageDraw.Draw(canvas, "RGBA"); rows = s.gmap_rows() if s.gmap else None
         d.rectangle((0, 0, w, h), fill=(8, 10, 14, 235))
         if not rows or not rows[0]:
-            d.text((w // 2 - 90, h // 2 - 6), "There is no map for this level.   M = close", fill=(230, 230, 220, 255)); return
+            d.text((w // 2 - 90, h // 2 - 6), uitext.t("map_none"), fill=(230, 230, 220, 255)); return
         if self.gmap != s.gmap: self.gmap, self.thumbs, self._base = s.gmap, {}, None
         self.update(s); s.request_map_players()
         cols, nrows = len(rows[0]), len(rows)
@@ -123,7 +124,7 @@ class WorldMap:
         for i in range(1, cols): d.line((ox + i * cs, oy, ox + i * cs, oy + mh - 1), fill=(0, 0, 0, 70))
         for j in range(1, nrows): d.line((ox, oy + j * cs, ox + mw - 1, oy + j * cs), fill=(0, 0, 0, 70))
         pending = sum(1 for r in rows for n in r if n not in self.thumbs)
-        d.text((8, 8), "Map: %s   %d x %d levels%s   M / Esc = close" % (os.path.splitext(s.gmap)[0], cols, nrows, "   loading %d ..." % pending if pending else ""), fill=(255, 255, 255, 255))
+        d.text((8, 8), "Map: %s   %d x %d levels%s   %s" % (os.path.splitext(s.gmap)[0], cols, nrows, "   loading %d ..." % pending if pending else "", uitext.t("map_close")), fill=(255, 255, 255, 255))
         others = self.players(s, rows); dot = max(3, cs // 6)
         here = self.own_cell(s, rows)
         for nick, account, cx, cy, px, py, live in others:

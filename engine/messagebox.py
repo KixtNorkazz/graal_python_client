@@ -2,7 +2,7 @@
 (Down / Right / Enter / Space / A = next page, Up / Left = back; after the last page the box closes; Esc closes at once). A text that fits on one page stays up
 for a few seconds, or until you walk on."""
 import time
-from PIL import Image, ImageDraw, ImageFont
+from PIL import ImageDraw, ImageFont
 
 BOX = (40, 300, 560, 124)
 LINES, PAD = 6, 12

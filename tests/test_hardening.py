@@ -105,6 +105,7 @@ def main():
         check(not any(b"\x2b" in l and b"\x2c" in l for l in sent), "a plain level never sends a gmap cell")
     # An NPC props packet that ends inside a prop keeps what was read (the frost trees lost picture and script).
     from graalproto import gint_enc
+    import crashguard; crashguard.LOG = os.path.join(tempfile.mkdtemp(), "crash.log")   # the logged packet must not end up in the player's crash.log
     T = gclient.Session.__new__(gclient.Session); gclient.Session.__init__(T, "a", "b", "222", ("127.0.0.1", 1)); T.send = lambda l: None
     T.handle("line", 3, gint_enc(1169, 3) + gchar(0) + gchar(18) + b"val_frost-tree.png" + gchar(1) + gint_enc(5, 2) + b"hello" + gchar(2))
     check(T.npcs.get(1169) == {"IMAGE": "val_frost-tree.png", "SCRIPT": "hello"}, f"a truncated NPC packet keeps its props: {T.npcs.get(1169)}")
@@ -115,6 +116,16 @@ def main():
     from inventory import Inventory
     inv = Inventory(); inv.choose(D, [w.name for w in D.runner.firable()].index("Green")); inv.fire(D); D.tick_all(); D.attack(); D.tick_all()
     check(D.me.get("GANI") == "green-fire", f"the selected dragon answers the sword, the other does not: {D.me.get('GANI')}")
+    # A packet split over two frames is one packet (gs2emu splits over a slow link): taken as two, NPC props lost their last byte.
+    from graalproto import LineParser
+    data = b"#tree with x and y\n$second\n"
+    for cut in range(1, len(data)):
+        lp = LineParser(); got = list(lp.feed(data[:cut])) + list(lp.feed(data[cut:]))
+        check(got == [("line", 3, b"tree with x and y"), ("line", 4, b"second")], f"a packet cut at byte {cut} still arrives whole: {got}")
+    raw = gchar(100) + gint_enc(6, 3) + b"\n" + b"#ABCD\n" + b"$after\n"   # PLO_RAWDATA 6, then 6 raw bytes, then a line
+    for cut in range(1, len(raw)):
+        lp = LineParser(); got = list(lp.feed(raw[:cut])) + list(lp.feed(raw[cut:]))
+        check(got[1:] == [("raw", 3, b"ABCD"), ("line", 4, b"after")], f"a raw block cut at byte {cut} still arrives whole: {got}")
     print("hardening tests passed")
 
 main()

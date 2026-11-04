@@ -57,7 +57,7 @@ class Projectiles:
         ox, oy = self._origin(); self.list.append(Projectile(ox + x, oy + y, z, ang, zang, pw, gani.rstrip(","), params, local=False))
 
     def tick(self, now=None):
-        s = self.s; now = now or time.time(); keep = []
+        now = now or time.time(); keep = []
         for p in self.list:
             alive = now - p.t0 < MAX_AGE
             while alive and p.next <= now:

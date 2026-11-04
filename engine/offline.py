@@ -3,7 +3,7 @@
   python3 viewer.py --offline turtlejunction-.gmap [--cell 3,2] [--pos 512,512]
   python3 viewer.py --offline dreamworld-laboopeakbase.nw
 """
-import os, re, sys, time
+import os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config
 import assets, nwlevel, render

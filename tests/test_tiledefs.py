@@ -21,6 +21,28 @@ def main():
     check(render.tileset_for("val_hellsreach_a.nw", tw, []) is render.tileset_for("val_hellsreach_a.nw", tw, []), "the canvas is cached")
     blk = "/* addtiledef zz_main.png,Old_,0;\n   addtiledef2 zz_over.png,Old_,1760,352; */\n  //addtiledef zz_main.png,Old_,0;\naddtiledef2 zz_over.png,New_,0,0;"
     check([c[2] for c in render._tiledef_cmds(blk)] == ["New_"], "tiledef lines inside /* */ and // comments are not commands (the TileDefs weapon has 37 of them in block comments)")
+    # addtiledef2: a smaller picture goes on top of a larger one (greendale-pub_1 writes the small one first, then a full-width one at 0,0).
+    import render as _r
+    from PIL import Image as _I
+    _r._img_cache["zz-small.png"] = _I.new("RGBA", (16, 16), (255, 0, 0, 255)); _r._img_cache["zz-full.png"] = _I.new("RGBA", (2048, 512), (0, 0, 255, 255))
+    _ts = _r.tileset_for("zz-room.nw", "", ["removetiledefs;\naddtiledef2 zz-small.png,#L,1024,0;\naddtiledef2 zz-full.png,#L,0,0;"])
+    assert _ts.getpixel((1030, 5)) == (255, 0, 0, 255) and _ts.getpixel((10, 5)) == (0, 0, 255, 255), "the small picture written first stays on top of the full-width one written after it"
+    # ... and the other way round (portwolfe_b2): the full-width picture first, then small pieces - a smaller picture is never hidden by a larger one.
+    _ts = _r.tileset_for("zz-room2.nw", "", ["removetiledefs;\naddtiledef2 zz-full.png,#L,0,0;\naddtiledef2 zz-small.png,#L,1024,0;"])
+    assert _ts.getpixel((1030, 5)) == (255, 0, 0, 255) and _ts.getpixel((10, 5)) == (0, 0, 255, 255), "small pieces after a full-width picture stay visible"
+    # Prefixed tiledefs stay registered when you walk on: portwolfe_a1 registers addtiledef2 ...,portwolfe_,... and portwolfe_alley2 (a plain level) has none of its own.
+    import gclient as _g
+    _r._img_cache["zz-green.png"] = _I.new("RGBA", (16, 16), (0, 255, 0, 255))
+    _G = _g.Session.__new__(_g.Session); _g.Session.__init__(_G, "a", "b", "222", ("127.0.0.1", 1)); _G.send = lambda l: None
+    _G.gmap, _G.level_name = "zzport.gmap", "zzport_a1.nw"
+    _G.npcs = {1: {"SCRIPT": "//#CLIENTSIDE\nif (created) {\n  addtiledef2 zz-green.png,zzport_,1024,0;\n  addtiledef2 zz-full.png, #L,0,0;\n  removetiledefs;\n}"}}
+    _G._enter_world("zzport_alley2.nw")
+    mem = _G.snapshot()["tiledef_memory"]
+    assert mem == ["addtiledef2 zz-green.png,zzport_,1024,0;"], "only the prefixed add line is kept (not #L, not removetiledefs): %r" % mem
+    _ts = _r.tileset_for("zzport_alley2.nw", "", [], mem)
+    assert _ts.getpixel((1030, 5)) == (0, 255, 0, 255), "a plain level gets the prefixed tiles registered in the level before"
+    _o = _r.tileset_for("zzother.nw", "", [], mem)
+    assert _o.getpixel((1030, 5)) != (0, 255, 0, 255), "but only levels whose name starts with the prefix"
     print("tiledefs tests passed")
 
 if __name__ == "__main__": main()

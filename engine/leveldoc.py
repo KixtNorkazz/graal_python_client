@@ -2,7 +2,7 @@
 
 The file format is GLEVNW01 as gs2emu reads and writes it: `BOARD x y width layer data` rows (two base64 characters per tile), then LINK, SIGN, CHEST,
 BADDY and NPC records. Board rows of other layers are kept as they were read."""
-import copy, re
+import copy
 from nwlevel import parse_nw
 
 _B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

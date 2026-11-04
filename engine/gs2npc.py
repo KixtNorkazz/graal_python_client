@@ -1,8 +1,8 @@
 """Host side of the GS2 interpreter for level NPCs: NPC properties (x, y, image, ...), `player` / `client` / `thiso` objects,
 `findimg(n)` image objects, timers, and a bridge that passes every other command call to the GS1 implementations
 (`weapons.yield_command`) so both languages share one set of effects."""
-import math, re, time
-import gs2src, weapons, particles, gs2sched
+import re, time
+import weapons, particles, gs2sched
 from gs2src import Obj, DictObj, NullObj as _GenericNull, num, text, truth
 from weapons import Ctx
 

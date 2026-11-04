@@ -69,6 +69,24 @@ def main():
             f2.asked.add("zz-own.png"); f2.on_file(pl("zz-own.png", b"NEW"))
             assert open(os.path.join(w, "heads", "mine", "zz-own.png"), "rb").read() == b"NEW", "a newer copy replaces the file where you put it"
         finally: assets.fetcher = old_fetcher
+    # A damaged local copy must not hide a good one with the same name (other capitals, other folder), and with no good copy the server is asked.
+    import render as rnd
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as d2:
+        os.makedirs(os.path.join(d2, "a")); os.makedirs(os.path.join(d2, "b"))
+        open(os.path.join(d2, "a", "zz-twin.png"), "wb").write(b"\x89PNG\r\n\x1a\nbroken")
+        Image.new("RGBA", (4, 4), (1, 2, 3, 255)).save(os.path.join(d2, "b", "Zz-Twin.png"))
+        open(os.path.join(d2, "a", "zz-bad.png"), "wb").write(b"\x89PNG\r\n\x1a\nbroken")
+        assets.add_root(d2); old_f = assets.fetcher
+        class F:
+            wanted = []
+            def want(self, key, level=False, kind=None): self.wanted.append(key)
+            def revalidate(self, p): pass
+        assets.fetcher = F()
+        try:
+            im = rnd.load_image("zz-twin.png"); assert im is not None and im.getpixel((0, 0)) == (1, 2, 3, 255), "the good twin is used"
+            assert rnd.load_image("zz-bad.png") is None and "zz-bad.png" in F.wanted, f"no good copy: asked the server ({F.wanted})"
+        finally: assets.fetcher = old_f
     assert filefetch.world_folder_name("My Graal Server") == "My Graal Server" and filefetch.world_folder_name('a/b:c*?. ') == "a_b_c__", "folder names"
     print("filefetch tests passed")
 

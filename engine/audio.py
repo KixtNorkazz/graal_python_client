@@ -1,6 +1,6 @@
 """Sound: WAV decode (stdlib `wave`) + a small software mixer, played through an SDL2 audio callback (ctypes).
 Works without a device: `Mixer.mix(n)` is plain Python and `Audio.played` records every request (used by tests)."""
-import array, ctypes, ctypes.util, os, sys, wave
+import array, ctypes, os, sys, wave
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import assets
 

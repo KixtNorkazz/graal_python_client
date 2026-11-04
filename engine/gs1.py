@@ -1,7 +1,7 @@
 """A deliberately small GS1 subset interpreter: runs the client-side script of an NPC once (created / playerenters /
 timeout fired) and reports its visual effects. Anything it does not know is ignored (and counted in `unknown`)."""
 import safeexpr
-import math, random, re
+import math, re
 
 TRUE_FLAGS = {"created", "playerenters", "timeout"}
 

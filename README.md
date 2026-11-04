@@ -1,6 +1,6 @@
 # graal_reborn client
 
-A Python client reverse engineered by observing Graal online game protocol (versions 2.22 / 2.31). It logs in through a list server, renders levels and gmaps with an SDL2 window (loaded with ctypes) and Pillow, and runs GS1 and GS2 scripts for weapons and NPCs on the client side. It is tested against gs2emu.
+A Python client for the Graal online game protocol (versions 2.22 / 2.31), reverse engineered from the original client. It logs in through a list server, renders levels and gmaps with an SDL2 window (loaded with ctypes) and Pillow, and runs GS1 and GS2 scripts for weapons and NPCs on the client side. It is tested against gs2emu.
 
 ## Requirements
 - Python 3.10 or newer
@@ -44,6 +44,9 @@ Which list server the client asks is set in `paths.json` (key `listserver`). Cop
 | `account_dir` | account folder (only used by live test scripts) |
 
 All the local folders are optional: the client downloads the files it needs from the game server while you play.
+
+## Files from the original client
+`engine/builtin/pics1.png` (the default tileset) and `engine/builtin/sprites.png` come from the original Graal client; game servers do not have them. Without `pics1.png` levels are drawn without tiles and the status line says `pics1.png missing`. `engine/logos-1.jpg` (optional) is the login screen background.
 
 ## Controls
 Arrow keys walk (diagonals work), `A` grab, `A` + arrow pull/push, `S` sword, `D` fire the active weapon, `Q` inventory, `Tab` chat (Up arrow shows the history), `M` map with the players on the same gmap, `F` appearance, `F7` player list (click a player to select, double-click or Enter to write a private message; received ones pop up), `F1` settings (sound on/off, volume of sound effects and of looped sounds), `F11` fullscreen, `F12` screenshot.

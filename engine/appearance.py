@@ -3,6 +3,7 @@
 The lists are the text files `heads.txt` and `bodies.txt` in the server's world folder (made by `server/make_appearance_lists.py`; every client fetches them like any
 other file). Without them the folders `heads/` and `bodies/` of the local asset folders are listed, and a file name can be typed in. Done sends the head and body
 properties silently, the same as `sethead` and `setbody` do, so the server keeps them with the account."""
+import uitext
 import os, time
 from PIL import Image, ImageDraw
 import assets, config, render, window
@@ -146,7 +147,7 @@ class Appearance:
         if not self.open: return
         w, h = canvas.size; d = ImageDraw.Draw(canvas, "RGBA")
         d.rectangle((8, 8, w - 8, h - 8), fill=BG, outline=EDGE, width=2)
-        d.text((20, 14), "Choose how you look", fill=HOT); d.text((w - 250, 14), "Tab = heads / bodies   Esc = cancel", fill=DIM)
+        d.text((20, 14), "Choose how you look", fill=HOT); d.text((w - 250, 14), uitext.t("look_help"), fill=DIM)
         props = dict(s.me); props["HEADIMAGE"] = self.chosen["heads"] or props.get("HEADIMAGE"); props["BODYIMAGE"] = self.chosen["bodies"] or props.get("BODYIMAGE")
         box = Image.new("RGBA", (64, 72), (40, 70, 44, 255)); render.draw_character(box, "idle", 2, props, 16, 26, 0.0)
         canvas.alpha_composite(box.resize((192, 216), Image.NEAREST), (28, 50))

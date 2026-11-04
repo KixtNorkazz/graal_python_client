@@ -1,5 +1,6 @@
 """Offline check: replay captured proxy logs (hex lines: 't cN C>S|S>C len hex') through graalproto."""
 import sys, collections
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
 from graalproto import *
 

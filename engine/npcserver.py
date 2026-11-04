@@ -6,8 +6,8 @@ Server scripts get the server API: `player` (the caller), `findplayer(account)`,
 `addweapon` / `removeweapon`, `server.*` variables, `triggerclient(...)` (loopback to `onActionClientSide`), `sendtorc`, `savelog2`, `echo2`, `sendpm`,
 and the introspection methods (`type()`, `objectType()`, `getVarNames()` ...). File access stays in `server_files/` (see gs2src.sandbox_path)."""
 import os, re, time
-import gs2src, gs2npc, gs2sched, weaponlib, weapons
-from gs2src import Obj, DictObj, NullObj, num, text, truth
+import gs2src, gs2sched, weaponlib
+from gs2src import Obj, DictObj, num, text, truth
 
 LATENCY = 0.02
 
@@ -188,7 +188,7 @@ class ServerHost:
         if low == "npcs": return [NpcSrv(self.srv, i, n) for i, n in self.s.npcs.items()]
         if low == "thiso": return self.script.gs2.this
         o = self.srv.script_object(low)
-        return o if o is not None else (self.s.gui.lookup(low) if False else None)
+        return o
     def has_prop(self, low): return low in self.PROPS
     def get_prop(self, low): return 640.0 if low == "screenwidth" else 480.0 if low == "screenheight" else None
     def set_prop(self, low, v):
@@ -269,8 +269,6 @@ class NpcServer:
         except gs2src.Gs2Error: return
         self.scripts[weapon.name] = sc
         if sc.gs2.has_function("oncreated"): sc.run("oncreated", sender=session)
-
-    def detach(self, name): self.scripts.pop(name, None)
 
     def script_object(self, low):
         for sc in self.scripts.values():

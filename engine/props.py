@@ -1,5 +1,5 @@
 """Player / NPC property parsing for the gs2emu wire format (types from gs2emu PropertySerializers / NPC.h / PlayerProps.h)."""
-from graalproto import gint, gint_enc
+from graalproto import gint
 import enums
 
 class Reader:

@@ -2,7 +2,7 @@
 runs events through the same interpreter as the weapons (weapons.parse / run_nodes / yield_command).
 Events: created + playerenters when the NPC appears, playerenters again when we re-enter its level, timeout (timeout = secs),
 playertouchsme (edge-triggered), playerchats. The visual state is a gs1.Fx, which render.py and collision.py read."""
-import re, time
+import re
 import gs1, weapons, gs2src, gs2npc, gs2sched
 from weapons import Ctx, run_nodes, client_part, to_float
 
@@ -382,7 +382,7 @@ class NpcRuntime:
         if i is not None and (i.script, i.image) == (n.get("SCRIPT", "") or "", n.get("IMAGE", "") or ""):
             if i.src != (n["X2"], n["Y2"]): i.src = (n["X2"], n["Y2"]); i.fx.x, i.fx.y = n["X2"] / 16, n["Y2"] / 16; self.version += 1
             return i
-        i = self.inst[nid] = NpcInstance(self, nid, n); self.version += 1
+        i = self.inst[nid] = NpcInstance(self, nid, n); self.version += 1; self.inst_rev = getattr(self, "inst_rev", 0) + 1
         for ev in ("created", "playerenters"):
             if i.has(ev) or (ev == "created" and not i.gs2 and i.script.strip()): self.run(i, ev)
         i._base = self._snap(i)
@@ -463,6 +463,20 @@ class NpcRuntime:
             import render; im = render.load_image(name); self._img_size[name] = im.size if im else (16, 16)
         return self._img_size[name]
 
+    NEAR_SLACK = 256
+
+    def _near(self, me_x, me_y, now):
+        """The instances within ACTIVE_RANGE + NEAR_SLACK of the player, worked out again only when the player has moved more than NEAR_SLACK, the
+        instances changed, or half a second has passed (a gmap has a thousand NPCs; tick still makes the exact range test for each one)."""
+        c = self.__dict__.setdefault("_near_cache", {"key": None})
+        key = (len(self.inst), getattr(self, "inst_rev", 0))   # instances made, replaced or removed (moves are covered by the slack and the half second)
+        if c["key"] == key and abs(me_x - c["x"]) < self.NEAR_SLACK and abs(me_y - c["y"]) < self.NEAR_SLACK and 0 <= now - c["t"] < 0.5: return c["list"]
+        r = ACTIVE_RANGE + self.NEAR_SLACK; out = []
+        for i in self.inst.values():
+            gx, gy = self._gpos(i)
+            if abs(gx - me_x) <= r and abs(gy - me_y) <= r: out.append(i)
+        c.update(key=key, x=me_x, y=me_y, t=now, list=out); return out
+
     def tick(self, now=None):
         s = self.s; now = now or s.clock(); runs = 0
         if s.level_name != self._lvl:
@@ -470,7 +484,7 @@ class NpcRuntime:
             if not first:
                 for i in self.inst.values():
                     if i.level == s.level_name and i.has("playerenters"): self.run(i, "playerenters")
-        for nid in [k for k in self.inst if k not in s.npcs]: del self.inst[nid]; self.version += 1
+        for nid in [k for k in self.inst if k not in s.npcs]: del self.inst[nid]; self.version += 1; self.inst_rev = getattr(self, "inst_rev", 0) + 1
         cx, cy = s.cell if s.gmap else (0, 0); me_x, me_y = cx * 1024 + s.pos[0], cy * 1024 + s.pos[1]
         dt = now - self._last if self._last else 0.0; self._last = now
         at = s.attached
@@ -483,7 +497,7 @@ class NpcRuntime:
             else: self._att_rem = (0.0, 0.0)
             self._att_last = (at,) + cur
         else: self._att_last = None
-        for i in list(self.inst.values()):
+        for i in self._near(me_x, me_y, now):
             gx, gy = self._gpos(i)
             if abs(gx - me_x) > ACTIVE_RANGE or abs(gy - me_y) > ACTIVE_RANGE: continue
             for idx, sh in i.fx.shows.items():

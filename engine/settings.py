@@ -1,15 +1,17 @@
-"""Settings (F1): sound on/off and the volume of sound effects and of looped sounds (the waves of portwolfe, other ambience).
+"""Settings (F1): sound on/off, the volume of sound effects and of looped sounds (the waves of portwolfe, other ambience), and the frame rate cap.
 
 Kept in `settings.json` in the project folder (the Android app points PATH into its private folder). The window is pure logic plus `draw()`;
 the viewer feeds it keys and clicks: Up/Down choose a row, Left/Right (or the - / + buttons) change it, Enter or a click toggles, Esc / F1 close."""
+import uitext
 import json, os
 from PIL import ImageDraw
 import render
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(os.path.dirname(HERE), "settings.json")   # in the project folder, one above engine/
-DEFAULTS = {"sound": True, "effects_volume": 80, "loop_volume": 40}
-ROWS = (("sound", "Sound"), ("effects_volume", "Sound effects"), ("loop_volume", "Looped sounds (waves, ambience)"))
+DEFAULTS = {"sound": True, "effects_volume": 80, "loop_volume": 40, "fps_cap": 40}
+ROWS = (("sound", "Sound"), ("effects_volume", "Sound effects"), ("loop_volume", "Looped sounds (waves, ambience)"), ("fps_cap", "Frame rate cap"))
+CHOICES = {"fps_cap": (20, 30, 40, 60, 90, 120, 0)}   # 0 = no cap (as fast as the computer can draw, one CPU core busy)
 STEP = 10
 PANEL = (120, 80, 400)   # x, y, width (logical 640x480)
 ROW_H = 34
@@ -17,14 +19,23 @@ ROW_H = 34
 
 def load(defaults=None):
     """The saved settings over the defaults; a damaged or missing file gives the defaults."""
-    out = dict(defaults or DEFAULTS)
+    base = {**DEFAULTS, **(defaults or {})}; out = dict(base)
     try:
         raw = json.load(open(PATH, encoding="utf-8"))
         for k, v in raw.items():
             if k in out and type(v) is type(out[k]): out[k] = v
     except (OSError, ValueError): pass
     for k in ("effects_volume", "loop_volume"): out[k] = max(0, min(100, int(out[k])))
+    for k, ch in CHOICES.items():
+        if out[k] not in ch: out[k] = base[k] if base[k] in ch else DEFAULTS[k]
     return out
+
+
+def frame_time(values):
+    """Seconds a frame should at least take for the frame rate cap (0.0 = no cap)."""
+    cap = values.get("fps_cap", DEFAULTS["fps_cap"])
+    return 1.0 / cap if cap else 0.0
+
 
 
 def save(values):
@@ -49,7 +60,10 @@ class SettingsWindow:
 
     def _change(self, s, row, delta):
         key = ROWS[row][0]
-        if key == "sound": self.values["sound"] = not self.values["sound"] if delta else self.values["sound"]
+        if isinstance(self.values.get(key), bool): self.values[key] = not self.values[key] if delta else self.values[key]   # on/off rows (sound, the phone's battery saver)
+        elif key in CHOICES:
+            ch = CHOICES[key]; i = ch.index(self.values[key]) if self.values[key] in ch else 0
+            self.values[key] = ch[max(0, min(len(ch) - 1, i + delta))]
         else: self.values[key] = max(0, min(100, self.values[key] + delta * STEP))
         apply(s, self.values); save(self.values)
 
@@ -60,7 +74,7 @@ class SettingsWindow:
         elif sym == window.K_DOWN: self.cursor = (self.cursor + 1) % len(ROWS)
         elif sym == window.K_LEFT: self._change(s, self.cursor, -1)
         elif sym == window.K_RIGHT: self._change(s, self.cursor, 1)
-        elif sym in (window.K_RETURN, ord(" ")) and ROWS[self.cursor][0] == "sound": self._change(s, self.cursor, 1)
+        elif sym in (window.K_RETURN, ord(" ")) and isinstance(self.values.get(ROWS[self.cursor][0]), bool): self._change(s, self.cursor, 1)
         elif sym in (window.K_ESCAPE, K_F1): self.open = False
         return True
 
@@ -84,16 +98,17 @@ class SettingsWindow:
                 if box[0] <= x < box[2] and box[1] <= y < box[3]: self.cursor = row; self._change(s, row, delta); return True
             if px <= x < px + pw and py + 40 + row * ROW_H <= y < py + 40 + (row + 1) * ROW_H:
                 self.cursor = row
-                if ROWS[row][0] == "sound": self._change(s, row, 1)
+                if isinstance(self.values.get(ROWS[row][0]), bool): self._change(s, row, 1)
                 return True
         return px <= x < px + pw and py <= y < py + h
 
     def _value_text(self, key):
         v = self.values[key]
-        if key == "sound": return "On" if v else "Off"
+        if isinstance(v, bool): return "On" if v else "Off"
+        if key == "fps_cap": return f"{v} fps" if v else "Off"
         return f"{v} %" if self.values["sound"] else f"({v} %)"
 
-    def draw(self, out, s=None, hint="Up/Down choose   Left/Right change   F1 or Esc close"):
+    def draw(self, out, s=None, hint=None):
         if not self.open: return
         px, py, pw = self.panel; h = 40 + len(ROWS) * ROW_H + 40
         d = ImageDraw.Draw(out, "RGBA")
@@ -110,6 +125,7 @@ class SettingsWindow:
             render.draw_chat(out, self._value_text(key), (minus[2] + plus[0]) // 2, y + 18)
         cb = self._close_box(); d.rectangle(cb, fill=(60, 70, 110, 255), outline=(240, 220, 130, 255))
         render.draw_chat(out, "Close", (cb[0] + cb[2]) // 2, cb[3] - 6)
+        hint = uitext.t("settings_help") if hint is None else hint
         if hint: render.draw_chat(out, hint, px + pw // 2, py + h + 16)
 
 

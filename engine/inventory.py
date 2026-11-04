@@ -3,7 +3,8 @@ S is the sword as always (weapons hear `playershootssword`: the mounted dragon a
 
 Pure logic plus `draw()`; the viewer feeds it keys and clicks. The weapons come from `session.runner.firable()` (the ones with a `weaponfired` event), in the order
 the server sent them. Digits 1-9 pick the n-th weapon directly."""
-from PIL import Image, ImageDraw
+from PIL import ImageDraw
+import uitext
 import render
 
 ROW_H, PANEL = 20, (16, 16, 330)
@@ -65,7 +66,7 @@ class Inventory:
 
     def status(self, s):
         """Text for the HUD line."""
-        return f"Weapon: {self.active}  (D uses it, Q = inventory)" if self.active in [w.name for w in self.weapons(s)] else "Q: inventory"
+        return uitext.t("inv_status", w=self.active) if self.active in [w.name for w in self.weapons(s)] else uitext.t("inv_none")
 
     def draw(self, out, s):
         if not self.open: return
@@ -84,4 +85,4 @@ class Inventory:
                 ic = im.copy(); ic.thumbnail((16, 16)); out.alpha_composite(ic.convert("RGBA"), (px + 8, ry + 1))
             mark = ("* " if w.name == self.active else "  ") + (f"{i + 1}. " if i < 9 else "") + w.name
             render.draw_chat(out, mark, px + 30 + len(mark) * 3, ry + 16)
-        render.draw_chat(out, "Enter = choose   D = use weapon   Q = close", px + pw // 2, py + h - 4)
+        render.draw_chat(out, uitext.t("inv_help"), px + pw // 2, py + h - 4)

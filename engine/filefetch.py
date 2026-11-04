@@ -10,7 +10,7 @@ Server answers: PLO_FILE (102, raw: {GINT5 modtime}{gchar len}{name}{data}); fil
 several PLO_FILE chunks and PLO_LARGEFILEEND (69). PLO_FILESENDFAILED (30) {name} = the server does not have it, PLO_FILEUPTODATE (45) {name}."""
 import os, re, time
 import assets
-from graalproto import gline, gchar, gint
+from graalproto import gline, gint
 
 MAX_OUT = 6
 TIMEOUT = 12.0
