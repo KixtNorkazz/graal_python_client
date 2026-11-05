@@ -1,5 +1,5 @@
 """Fetch missing graphics (images, ganis, sounds) and gmaps from the game server while playing, instead of needing a copy of the server's folders.
-A level file (.nw) is fetched only on request, for the links and signs of the level you are in and for the map; scripts and other text files are never fetched.
+Level files (.nw) are never fetched (the server sends boards, links and signs in packets); scripts and other text files are never fetched either.
 
 `assets.find(name)` calls `Fetcher.want(name)` for a file it cannot find locally; the request (PLI_WANTFILE) goes out from `tick()`, a few at a time, and the
 answer is stored in the world folder (`worlds/<server name>/<kind>/`, paths.json key `worlds_dir`; see kind_of) with the server's modification time. Only files that something actually asks
@@ -17,6 +17,20 @@ TIMEOUT = 12.0
 RETRY = 180.0
 FETCH_EXT = {".png", ".gif", ".mng", ".jpg", ".jpeg", ".bmp", ".gani", ".wav", ".mp3", ".ogg", ".mid", ".midi", ".gmap"}
 FETCH_NAMES = {"heads.txt", "bodies.txt"}
+
+
+def forget_levels(folder):
+    """Delete the level files earlier versions downloaded into this world's folder (worlds/<server>/levels): the client no longer asks for
+    them, and copies of the server's levels should not lie around. Only the download folder of the world, never the player's own levels/."""
+    sub = os.path.join(folder, "levels")
+    try: names = os.listdir(sub)
+    except OSError: return 0
+    n = 0
+    for name in names:
+        if name.lower().endswith((".nw", ".graal")):
+            try: os.remove(os.path.join(sub, name)); n += 1
+            except OSError: pass
+    return n
 MAX_FILE = 8 << 20   # the largest real game file is a few MB; a server must not fill the phone's storage
 KINDS = ("heads", "bodies", "hats", "swords", "shields", "tilesets", "ganis", "sounds", "levels", "images")
 SOUND_EXT = {".wav", ".mp3", ".ogg", ".mid", ".midi"}
@@ -44,6 +58,7 @@ BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 class Fetcher:
     def __init__(self, session, folder, clock=time.time):
         self.s, self.folder, self.clock = session, folder, clock
+        forget_levels(folder)
         self.queue, self.out, self.failed, self.checked, self.big = [], {}, {}, set(), {}
         self.received, self.missing, self.stale = [], [], []
         self.asked = set()   # names we requested or asked to revalidate: the only files a server may store here
@@ -54,7 +69,9 @@ class Fetcher:
         """A file is needed and not known locally. A level file (.nw) is only fetched when `level` is set. `kind`: see kind_of."""
         key = os.path.basename(name).lower()
         if kind and key not in self.kinds: self.kinds[key] = kind
-        if not key or BAD.search(key) or (os.path.splitext(key)[1] not in FETCH_EXT and key not in FETCH_NAMES and not (level and key.endswith(".nw"))): return
+        # Level files are never asked for: the server sends the board, links and signs in packets (clientsidelinks / clientsidesigns), and the
+        # level files with their NPC scripts are the server's own (a downloaded copy is a copy of the server's work anyone could take).
+        if not key or BAD.search(key) or (os.path.splitext(key)[1] not in FETCH_EXT and key not in FETCH_NAMES): return
         if key in self.out or key in self.queue: return
         if self.clock() - self.failed.get(key, -1e9) < RETRY: return
         self.queue.append(key)
@@ -62,6 +79,7 @@ class Fetcher:
     def revalidate(self, path):
         """A cached file was used: ask once per session whether the server has a newer one."""
         key = os.path.basename(path).lower()
+        if key.endswith((".nw", ".graal")): return   # never fetched, so never refreshed either
         if key in self.checked or not os.path.abspath(path).startswith(os.path.abspath(self.folder) + os.sep): return
         self.checked.add(key); self.asked.add(key)
         try: mt = int(os.stat(path).st_mtime)

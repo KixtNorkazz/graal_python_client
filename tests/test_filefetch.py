@@ -17,7 +17,7 @@ def main():
         assert f.queue == ["zz-nofile.png"] and not s.sent
         assets.find("zz-nofile.png"); assert len(f.queue) == 1
         assets.find("../evil:x.png"); assert len(f.queue) == 1
-        s0 = len(f.queue); [f.want(n) for n in ("zz-level.nw", "zz-script.txt", "zz-x.graal", "heads.txt")]; assert f.queue[s0:] == ["heads.txt"], f.queue; f.queue.pop(); f.want("zz-level.nw", level=True); assert f.queue[s0:] == ["zz-level.nw"], f.queue; f.queue.pop()
+        s0 = len(f.queue); [f.want(n) for n in ("zz-level.nw", "zz-script.txt", "zz-x.graal", "heads.txt")]; assert f.queue[s0:] == ["heads.txt"], f.queue; f.queue.pop(); f.want("zz-level.nw", level=True); assert f.queue[s0:] == [], f"a level file is never asked for, not even when the level is needed: {f.queue}"
         assets.find("../sub/y.png"); assert f.queue[-1] == "y.png"; f.queue.pop()
         f.tick(); assert s.sent == [b"7zz-nofile.png\n"], s.sent
         seen = []; assets.listeners.append(seen.append)
@@ -88,6 +88,13 @@ def main():
             assert rnd.load_image("zz-bad.png") is None and "zz-bad.png" in F.wanted, f"no good copy: asked the server ({F.wanted})"
         finally: assets.fetcher = old_f
     assert filefetch.world_folder_name("My Graal Server") == "My Graal Server" and filefetch.world_folder_name('a/b:c*?. ') == "a_b_c__", "folder names"
+    # Level files an earlier version downloaded are deleted from the world's download folder; gmaps and the player's own levels stay.
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as d2:
+        os.makedirs(os.path.join(d2, "levels")); own = os.path.join(d2, "mine"); os.makedirs(own)
+        for n in ("a.nw", "B.GRAAL", "keep.gmap"): open(os.path.join(d2, "levels", n), "w").write("x")
+        open(os.path.join(own, "c.nw"), "w").write("x")
+        assert filefetch.forget_levels(d2) == 2 and sorted(os.listdir(os.path.join(d2, "levels"))) == ["keep.gmap"] and os.listdir(own) == ["c.nw"], os.listdir(os.path.join(d2, "levels"))
     print("filefetch tests passed")
 
 if __name__ == "__main__": main()

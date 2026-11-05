@@ -161,7 +161,7 @@ class Session:
     def handle(self, kind, pid, payload):
         if kind == "raw":
             if pid == 101 and self.cur_loading and len(payload) == 8192:
-                self.cur_loading.board = payload
+                self.cur_loading.board = payload; self.cur_loading.links = []; self.cur_loading.signs = []   # a fresh board: its links and signs follow
                 if not self.gmap and self.cur_loading.name == self.level_name: self.ensure_neighbours()
             elif pid == 102 and getattr(self, "files", None): self.files.on_file(payload)
             return
@@ -171,14 +171,19 @@ class Session:
             n = payload.decode("latin1")
             if n.endswith(".gmap"): self._enter_world(n); self.gmap = n
             else:
-                self.cur_loading = self.levels.setdefault(n, Level(n)); self.cur_loading.links = []
+                # Not emptying links / signs here: gs2emu sends the level name again after them (they were lost, and with level files no
+                # longer fetched the client had no links). A new board empties them (above), and the same link twice is kept once.
+                self.cur_loading = self.levels.setdefault(n, Level(n))
                 if self.level_name is None: self.level_name = n
         elif pid in (30, 45, 68, 69) and getattr(self, "files", None):
             {30: self.files.on_failed, 45: self.files.on_uptodate, 68: self.files.on_large_start, 69: self.files.on_large_end}[pid](payload.decode("latin1"))
         elif pid == 16: self.disc_message = payload.decode("latin1", "replace").strip()
-        elif pid == 1 and self.cur_loading: self.cur_loading.links.append(payload.decode("latin1").split())
+        elif pid == 1 and self.cur_loading:
+            l_ = payload.decode("latin1").split()
+            if l_ not in self.cur_loading.links: self.cur_loading.links.append(l_)
         elif pid == 5 and self.cur_loading and len(payload) >= 2:
-            from messagebox import decode_sign; self.cur_loading.signs.append((payload[0] - 0x20, payload[1] - 0x20, decode_sign(payload[2:])))
+            from messagebox import decode_sign; sg = (payload[0] - 0x20, payload[1] - 0x20, decode_sign(payload[2:]))
+            if sg not in self.cur_loading.signs: self.cur_loading.signs.append(sg)
         elif pid == 9:
             props = parse_player(payload); self.me.update(props); self._own_pos(props)
         elif pid == 8:
