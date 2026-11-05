@@ -59,7 +59,14 @@ class NpcInstance:
                 except (TypeError, ValueError): pass
                 s.attached = tgt if tgt in s.npcs and tgt else self.nid
             self.rt.version += 1; self.rt._att_last = None; return True
-        if name == "detachplayer": self.rt.s.attached = None; self.rt.version += 1; self.rt._att_last = None; return True
+        if name == "detachplayer":
+            self.rt.s.attached = None; self.rt.version += 1; self.rt._att_last = None
+            self.rt.s._let_go = (self.nid, self.rt.s.clock())   # the player may walk out of this NPC's shape (gclient._out_of_wall)
+            # The other NPCs the player is touching get playertouchsme again: a ladder made of several NPCs (the ladder class: each part
+            # attaches the player and lets go at its top) hands the player on to the next part, which was already touched while climbing.
+            for i in self.rt.inst.values():
+                if i is not self: i.touching = False
+            return True
         if name == "say":
             m = weapons.subst(",".join(args), ctx).strip(); self.fx.message = "" if m in ("", "0") else m; self.rt.version += 1; return True
         if name in ("setlevel2", "setlevel") and args:

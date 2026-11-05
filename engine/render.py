@@ -27,17 +27,21 @@ def load_image(name, kind=None):
 _horse_cache = {}
 
 def horse_frame(name, direction, step=0):
-    """Approximate frame of a horse sheet (96 x 576 = 9 rows of 64 px: row 0 up / down views 48 px wide, rows 1.. side views 96 px wide, facing left; the original client's
-    frame table is not known, this is read off the sheets). direction 0 up, 1 left, 2 down, 3 right (mirrored side view)."""
-    key = (name, direction, step % 3)
+    """One frame of a horse sheet (96 x 576 = 9 rows of 64 px), laid out as ride.gani's HORSE sprites: three groups of three rows -
+    group 0 standing, groups 1 and 2 the steps; in a group row 0 holds up (x 0, 48 wide) and down (x 48, 48 wide), row 1 the side view facing
+    left and row 2 facing right (96 wide). direction 0 up, 1 left, 2 down, 3 right. (Rows 1-3 were taken for the steps before, and row 3 is the
+    next group's up / down pair: two small horses in one picture.)"""
+    g = step % 3; key = (name, direction, g)
     if key not in _horse_cache:
         sheet = load_image(name); fr = None
-        if sheet is not None and sheet.height >= 128:
-            if direction == 0: fr = sheet.crop((0, 0, 48, 64))
-            elif direction == 2: fr = sheet.crop((48, 0, 96, 64))
-            else:
-                fr = sheet.crop((0, 64 * (1 + step % 3), 96, 64 * (2 + step % 3)))
-                if direction == 3: fr = fr.transpose(Image.FLIP_LEFT_RIGHT)
+        if sheet is not None and sheet.height >= 64 * (3 * g + 3) - 2:   # some sheets are a pixel short (575 high)
+            y = 192 * g
+            if direction == 0: fr = sheet.crop((0, y, 48, y + 64))
+            elif direction == 2: fr = sheet.crop((48, y, 96, y + 64))
+            elif direction == 1: fr = sheet.crop((0, y + 64, 96, y + 128))
+            else: fr = sheet.crop((0, y + 128, 96, y + 192))
+        elif sheet is not None and g: fr = horse_frame(name, direction, 0)
+        elif sheet is not None and sheet.height < 128: fr = sheet   # a single picture, not a horse sheet: shown as it is
         _horse_cache[key] = fr
     return _horse_cache[key]
 
@@ -231,6 +235,11 @@ def _tint(im, color):
     return Image.merge("RGBA", (R.point(lambda v: int(v * r)), G.point(lambda v: int(v * g)),
                                 B.point(lambda v: int(v * b)), A.point(lambda v: int(v * a))))
 
+def _has_horse(gani_name):
+    """Does the gani draw a HORSE sprite (ride, ridestill, ridesword ...)?"""
+    g = ganimod.load(gani_name)
+    return bool(g and any(sp and sp[0] == "HORSE" for sp in g.sprites.values()))
+
 def draw_character(canvas, gani_name, direction, props, x, y, t=0.0):
     """Draw a player/NPC character with the given gani frame 0 at pixel (x, y)."""
     g = ganimod.load(gani_name) or ganimod.load("idle")
@@ -246,6 +255,7 @@ def draw_character(canvas, gani_name, direction, props, x, y, t=0.0):
         if m: return props.get(f"GATTRIB{m.group(1)}") or ""
         if key == "SPRITES": return "sprites.png"
         if key == "PICS": return "pics1.png"
+        if key == "HORSE": return props.get("HORSEIMAGE") or ""   # ride.gani & co.: the rider's horse sheet
         return key
     for idx, ox, oy in frame:
         spr = g.sprites.get(idx)
@@ -286,6 +296,22 @@ def _light_tint(color):
 
 from PIL import ImageDraw, ImageFont
 _font = None
+SHOW_NAMES = True   # Settings (F1) > Player names
+NAME_DY = 64        # the name's baseline below a character's top-left (its feet are about 48 px down)
+NAME_MAX = 48       # longer nicknames are cut, with ".."
+
+def draw_name(view, text, cx, bottom_y):
+    """A player's nickname under the character: pale yellow with a dark outline, centred on cx."""
+    global _font
+    if _font is None:
+        try: _font = ImageFont.load_default(size=12)
+        except Exception: _font = ImageFont.load_default()
+    if len(text) > NAME_MAX: text = text[:NAME_MAX - 2] + ".."
+    d = ImageDraw.Draw(view); w = d.textlength(text, font=_font)
+    x, y = int(cx - w / 2), int(bottom_y - 14)
+    for ox_, oy_ in ((-1, 0), (1, 0), (0, -1), (0, 1)): d.text((x + ox_, y + oy_), text, font=_font, fill=(0, 0, 0, 255))
+    d.text((x, y), text, font=_font, fill=(255, 240, 170, 255))
+
 def draw_chat(view, text, cx, bottom_y):
     """Text above a character's head: white with a dark outline, centred on cx (bitmap font: this Pillow has no FreeType)."""
     global _font
@@ -486,7 +512,7 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
         part = i["n"].get("IMAGEPART")
         if part and part.get("h"): return i["key"] + part["h"]
         im = load_image(fx.image); return i["key"] + (im.height if im is not None else 0)
-    ents = [(nkey(i), 0, lambda i=i: draw_npc(i)) for i in normal]; bubbles = []
+    ents = [(nkey(i), 0, lambda i=i: draw_npc(i)) for i in normal]; bubbles = []; names = []
     for it in normal + over:
         n = it["n"]
         if n.get("IMAGE") == "#c#" or it["fx"].showchar:
@@ -497,19 +523,25 @@ def render_scene(snap, size=(640, 456), cam_offset=(24, 24), radius=1, show_ligh
         gx = ox + (pcx - cx) * 1024 + pl["X2"] - camx; gy = oy + (pcy - cy) * 1024 + pl["Y2"] - camy
         ents.append((gy + 32, 2, lambda pl=pl, gx=gx, gy=gy: draw_rider(pl, gx, gy)))
         if pl.get("MESSAGE"): bubbles.append((pl["MESSAGE"], gx + 16, gy + 2))
-    for hname, hx, hy, hcell in snap.get("horses", []):
-        him = load_image(hname)
+        if SHOW_NAMES and pl.get("NICKNAME"): names.append((str(pl["NICKNAME"]), gx + 16, gy + NAME_DY))
+    for horse in snap.get("horses", []):
+        hname, hx, hy, hcell = horse[:4]; hdir = horse[4] if len(horse) > 4 else 1   # a puthorse without a direction stands sideways
+        him = horse_frame(hname, hdir, 0)   # one standing frame, not the whole sheet
         if him is not None:
             hgx = ox + (hcell[0] - cx) * 1024 + hx * 16 - camx; hgy = oy + (hcell[1] - cy) * 1024 + hy * 16 - camy
             ents.append((hgy + him.height, 0, lambda him=him, hgx=hgx, hgy=hgy: _paste_clipped(view, him, int(hgx), int(hgy))))
     def draw_rider(props, gx, gy):
-        h = horse_frame(props["HORSEIMAGE"], props.get("SPRITE", 2) & 3, int(t * 6)) if props.get("HORSEIMAGE") else None
-        if h is not None:
-            _paste_clipped(view, h, int(gx + 16 - h.width // 2), int(gy + 40 - h.height))
-            gy -= 12
-        draw_character(view, (props.get("GANI") or "idle").split(",")[0], props.get("SPRITE", 2) & 3, props, gx, gy, t)
+        gname = (props.get("GANI") or "idle").split(",")[0]
+        if props.get("HORSEIMAGE") and not _has_horse(gname):   # a rider whose gani does not draw the horse itself (not ride / ridestill ...)
+            h = horse_frame(props["HORSEIMAGE"], props.get("SPRITE", 2) & 3, int(t * 6))
+            if h is not None:
+                _paste_clipped(view, h, int(gx + 16 - h.width // 2), int(gy + 40 - h.height))
+                gy -= 12
+        draw_character(view, gname, props.get("SPRITE", 2) & 3, props, gx, gy, t)
     ents.append((me_item["key"], 3, lambda: draw_rider(me, ox + px - camx, oy + py - camy)))
     for _, _, fn in sorted(ents, key=lambda e: (e[0], e[1])): fn()
+    if SHOW_NAMES and me.get("NICKNAME"): names.append((str(me["NICKNAME"]), ox + px - camx + 16, oy + py - camy + NAME_DY))
+    for n_ in names: draw_name(view, *n_)   # under the feet, so everyone sees who is who (and that a guild name worked)
     for b_ in bubbles: draw_chat(view, *b_)
     if me.get("MESSAGE_SHOWN"): draw_chat(view, me["MESSAGE_SHOWN"], ox + px - camx + 16, oy + py - camy + 2)
     for it in sorted(over, key=lambda i: i["key"]): draw_npc(it)

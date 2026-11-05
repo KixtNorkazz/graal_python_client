@@ -1,4 +1,4 @@
-"""Settings (F1): sound on/off, the volume of sound effects and of looped sounds (the waves of portwolfe, other ambience), and the frame rate cap.
+"""Settings (F1): sound on/off, the volume of sound effects and of looped sounds (the waves of portwolfe, other ambience), the frame rate cap, and names under the players.
 
 Kept in `settings.json` in the project folder (the Android app points PATH into its private folder). The window is pure logic plus `draw()`;
 the viewer feeds it keys and clicks: Up/Down choose a row, Left/Right (or the - / + buttons) change it, Enter or a click toggles, Esc / F1 close."""
@@ -9,8 +9,8 @@ import render
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(os.path.dirname(HERE), "settings.json")   # in the project folder, one above engine/
-DEFAULTS = {"sound": True, "effects_volume": 80, "loop_volume": 40, "fps_cap": 40}
-ROWS = (("sound", "Sound"), ("effects_volume", "Sound effects"), ("loop_volume", "Looped sounds (waves, ambience)"), ("fps_cap", "Frame rate cap"))
+DEFAULTS = {"sound": True, "effects_volume": 80, "loop_volume": 40, "fps_cap": 40, "show_names": True}
+ROWS = (("sound", "Sound"), ("effects_volume", "Sound effects"), ("loop_volume", "Looped sounds (waves, ambience)"), ("fps_cap", "Frame rate cap"), ("show_names", "Player names"))
 CHOICES = {"fps_cap": (20, 30, 40, 60, 90, 120, 0)}   # 0 = no cap (as fast as the computer can draw, one CPU core busy)
 STEP = 10
 PANEL = (120, 80, 400)   # x, y, width (logical 640x480)
@@ -47,6 +47,7 @@ def save(values):
 
 def apply(s, values):
     """Give the session's audio the volumes (0..1) and the on/off switch."""
+    import render; render.SHOW_NAMES = bool(values.get("show_names", True))   # names under the players
     a = getattr(s, "audio", None)
     if a is None: return
     a.set_volumes(values["effects_volume"] / 100 if values["sound"] else 0.0, values["loop_volume"] / 100 if values["sound"] else 0.0)

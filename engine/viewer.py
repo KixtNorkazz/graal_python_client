@@ -194,7 +194,8 @@ def render_frame(s, now, walking, walk_start, typing, text, font, fps, inv, pl, 
     if lv and lv.board:
         try:
             base = (s.me.get("GANI") or "idle").split(",")[0]
-            t = (now - walk_start) if (walking and base in (s.resolve_ani("walk"), "swim")) else (time.time() - s.gani_start if base not in ("idle", "walk") else 0.0)
+            # walking: from the first step; a gani a script set (also setani walk while it moves the player, as a ladder does): from its start
+            t = (now - walk_start) if (walking and base in (s.resolve_ani("walk"), "swim")) else (time.time() - s.gani_start if base != "idle" else 0.0)
             out.paste(render.render_scene(snap, size=(W, H - BAR), t=t), (0, 0))
         except Exception:
             traceback.print_exc()

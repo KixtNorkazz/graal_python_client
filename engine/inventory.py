@@ -27,8 +27,13 @@ class Inventory:
         self.cursor = i; self.active = ws[i].name; s.runner.selected = self.active; return self.active
 
     def fire(self, s):
-        """D: run `weaponfired` of the active weapon. Returns its name, or None (no active weapon / it is gone / weapons are disabled)."""
+        """D: run `weaponfired` of the active weapon. Returns its name, or None (no active weapon / it is gone / weapons are disabled).
+        On a horse D gets off it, unless the active weapon is one that is used while riding (its script checks `firedonhorse`); returns "dismount"."""
         ws = self.weapons(s); s.runner.selected = self.active
+        if s.me.get("HORSEIMAGE"):
+            w_ = next((w for w in ws if w.name == self.active), None)
+            if w_ is None or "firedonhorse" not in (getattr(w_, "script", "") or "").lower():
+                s.dismount(); return "dismount"
         for i, w in enumerate(ws):
             if w.name == self.active: return s.runner.fire(i)
         return None

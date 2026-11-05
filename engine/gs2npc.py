@@ -141,8 +141,10 @@ class PlayerObj(Obj):
         if name in ("x", "y"):
             x, y = s.pos; v = int(num(v) * 16)
             s.pos = (v, y) if name == "x" else (x, v)
-            from graalproto import gline, gchar, enc_pos, PROP_X2, PROP_Y2
-            s.send(gline(2, gchar(PROP_X2 if name == "x" else PROP_Y2) + enc_pos(v)))
+            if hasattr(s, "moved_by_script"): s.moved_by_script()   # tells the server, changes gmap cell, takes a link it lands on
+            else:
+                from graalproto import gline, gchar, enc_pos, PROP_X2, PROP_Y2
+                s.send(gline(2, gchar(PROP_X2 if name == "x" else PROP_Y2) + enc_pos(v)))
         elif name == "dir": s.me["SPRITE"] = int(num(v)) & 3
         elif name == "ani": s.play_gani(text(v), [])
     def call(self, name, args):
@@ -165,7 +167,7 @@ class SystemObj(Obj):
         return None
 
 class NpcHost:
-    PROPS = {"x", "y", "image", "rotation", "visible", "nick", "head", "body", "dir", "ani", "zoom", "width", "height", "chat", "level", "timeout", "playerx", "playery", "playerz", "mousex", "mousey", "mousescreenx", "mousescreeny", "screenwidth", "screenheight"}
+    PROPS = {"x", "y", "image", "rotation", "visible", "nick", "head", "body", "dir", "ani", "zoom", "width", "height", "chat", "level", "timeout", "playerx", "playery", "playerz", "mousex", "mousey", "mousescreenx", "mousescreeny", "screenwidth", "screenheight", "playerattached"}
 
     def __init__(self, inst, session, rt):
         self.inst, self.s, self.rt, self.fx = inst, session, rt, inst.fx; self.chat = ""
@@ -208,6 +210,7 @@ class NpcHost:
         if low == "screenwidth": return 640.0
         if low == "screenheight": return 480.0
         if low == "level": return self.inst.level or ""
+        if low == "playerattached": return 1.0 if self.s.attached is not None and self.s.attached == self.inst.nid else 0.0   # attached to this NPC (the ladder class)
         return None
     def set_prop(self, low, v):
         fx, n = self.fx, self.n

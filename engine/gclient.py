@@ -233,8 +233,8 @@ class Session:
         elif pid == 36 and len(payload) >= 6:
             cx_, cy_ = self.cell if self.gmap else (0, 0); self.blast_hits(cx_ * 1024 + (payload[3] - 0x20) * 8, cy_ * 1024 + (payload[4] - 0x20) * 8, payload[2] - 0x20)
         elif pid == 17 and len(payload) >= 4:
-            hx, hy = (payload[0] - 0x20) / 2, (payload[1] - 0x20) / 2; img = payload[3:].decode("latin1")
-            if img and not any(abs(h[1] - hx) < 0.3 and abs(h[2] - hy) < 0.3 for h in self.horses): self.horses.append((img, hx, hy, self.cell if self.gmap else (0, 0)))
+            hx, hy, hdir = (payload[0] - 0x20) / 2, (payload[1] - 0x20) / 2, (payload[2] - 0x20) & 3; img = payload[3:].decode("latin1")
+            if img and not any(abs(h[1] - hx) < 0.3 and abs(h[2] - hy) < 0.3 for h in self.horses): self.horses.append((img, hx, hy, self.cell if self.gmap else (0, 0), hdir))
         elif pid == 18 and len(payload) >= 2:
             hx, hy = (payload[0] - 0x20) / 2, (payload[1] - 0x20) / 2; self.horses[:] = [h for h in self.horses if not (abs(h[1] - hx) < 0.6 and abs(h[2] - hy) < 0.6)]
         elif pid == 28 and payload:
@@ -1055,6 +1055,8 @@ class Session:
         def dest(v, own): return own / 16 if v in ("playerx", "playery") else float(v)
         tx, ty = dest(link["dx"], self.pos[0]), dest(link["dy"], self.pos[1])
         self.log.append(f"warp via link -> {link['level']} at {tx},{ty}")
+        if (self.me.get("GANI") or "").split(",")[0] == self.resolve_ani("walk") and time.time() >= self.weapon_ani_until:
+            n = self.move_gani("idle"); self.me["GANI"] = n; self.send(gline(2, gchar(PROP_GANI) + gstr(n.encode())))   # a script's walk (a ladder) ends here
         self._enter_world(link["level"]); self.level_name = None; self.gmap = None; self.map_cell = None
         nb = self.levels.get(link["level"]); self.warp(link["level"], tx * 16, ty * 16)
         if nb is not None and nb.board: self.level_name = link["level"]
@@ -1205,6 +1207,9 @@ class Session:
         if self.off_world(x, y) or (not self.gmap and not (-16 <= x <= 1008 and -32 <= y <= 1008)):
             x, y = min(max(x, 0), 1008), min(max(y, 0), 1008); self.pos = (x, y)
         self.send(gline(2, gchar(PROP_X2) + enc_pos(x) + gchar(PROP_Y2) + enc_pos(y)))
+        # A link where the script put the player is taken, as in Graal: a ladder (world_ladder) moves the player up into the link at its top.
+        link = self.link_at()
+        if link: self.take_link(link)
 
     def _corner_slide(self, direction, x, y):
         """The step to (x, y) is blocked, but half a step (8 px) to the side the way is open: slide sideways now, like Graal, so the next step goes
@@ -1223,7 +1228,14 @@ class Session:
         buildings drop you on wall tiles, sometimes deep inside them) and the step to (x, y) does not make that overlap bigger and touches no
         NPC: allow it, as the original client does, or every direction stays blocked for ever. Once on the way out, going back in is refused."""
         here = self.coll.wall_overlap(self, *self.pos)
-        return here > 0 and self.coll.wall_overlap(self, x, y) <= here and not self.coll.blockers(self, x, y)
+        let_go = getattr(self, "_let_go", None)   # (NPC id, time) of the last detachplayer
+        npcs_here = {k: v for k, v in self.coll.npc_overlap(self, *self.pos).items() if let_go and k == let_go[0] and self.clock() - let_go[1] < 3.0}
+        if here <= 0 and not npcs_here: return False
+        if self.coll.wall_overlap(self, x, y) > here: return False
+        # A ladder blocks (setshape 1) and lets the player go at its top while the player still overlaps it: for a few seconds the step may take
+        # the player further out of the NPC that let go, touching no other one. Other NPC shapes block as always (a cart rolling onto a walker).
+        there = self.coll.npc_overlap(self, x, y)
+        return all(k in npcs_here and v < npcs_here[k] for k, v in there.items())
 
     def _send_pushed(self, d, x, y):
         """Walking into an NPC online: PLI_TRIGGERACTION `pushed,<dir>` at the point in front of the player (what `FUN_0053e7a8` sends in Graal_222.exe).
@@ -1397,6 +1409,7 @@ class Session:
             if fx_ < hx + 32 and fx_ + 16 > hx and fy_ < hy + 32 and fy_ + 16 > hy:
                 self.horses.remove(h); self.me["HORSEIMAGE"] = h[0]; self.send(gline(2, gchar(21) + gstr(h[0].encode("latin1"))))
                 self.send(gline(8, gchar(int(h[1] * 2)) + gchar(int(h[2] * 2))))
+                self._set_move_gani()   # ridestill / ride at once
                 return True
         return False
 
@@ -1404,10 +1417,15 @@ class Session:
         """Get off: the horse stands where the player is, the HORSEIMAGE prop is cleared."""
         name = self.me.get("HORSEIMAGE")
         if not name: return False
-        cell = self.cell if self.gmap else (0, 0); self.horses.append((name, self.pos[0] / 16, self.pos[1] / 16 + 0.5, cell))
+        cell = self.cell if self.gmap else (0, 0); self.horses.append((name, self.pos[0] / 16, self.pos[1] / 16 + 0.5, cell, self.me.get("SPRITE", 2) & 3))
         lx, ly = self.pos[0] / 16, self.pos[1] / 16 + 0.5
         if 0 <= lx < 64 and 0 <= ly < 64: self.send(gline(7, gchar(int(lx * 2)) + gchar(int(ly * 2)) + gchar(self.me.get("SPRITE", 2) & 3) + name.encode("latin1")))
-        self._no_mount = self.clock() + 1.5; self.me["HORSEIMAGE"] = ""; self.send(gline(2, gchar(21) + gstr(b""))); return True
+        self._no_mount = self.clock() + 1.5; self.me["HORSEIMAGE"] = ""; self.send(gline(2, gchar(21) + gstr(b"")))
+        self._set_move_gani(); return True   # off the horse: idle, not a riding pose without a horse
+
+    def _set_move_gani(self):
+        """After getting on or off a horse: the standing gani for the new state (ridestill or idle), also for the others."""
+        n = self.move_gani("idle"); self.me["GANI"] = n; self.send(gline(2, gchar(PROP_GANI) + gstr(n.encode())))
 
     def hurt_by_server(self, dx, dy, power):
         """PLO_HURTPLAYER: damage (`power` hearts), a knock-back of (dx, dy) px when the way is free, the hurt gani; the server is told the new hearts."""
@@ -1551,7 +1569,11 @@ class Session:
         return taken
 
 
-    def resolve_ani(self, name): return self.ani_replace.get(name, name)
+    RIDE_ANI = {"walk": "ride", "idle": "ridestill", "sword": "ridesword", "hurt": "ridehurt"}   # on a horse (HORSEIMAGE): the ride ganis draw horse and rider
+
+    def resolve_ani(self, name):
+        if self.me.get("HORSEIMAGE") and name in self.RIDE_ANI: name = self.RIDE_ANI[name]
+        return self.ani_replace.get(name, name)
 
     def in_water(self, px=None, py=None):
         """Are the player's feet on a water tile (types 11 / 12)? Then the avatar swims."""
@@ -1560,6 +1582,7 @@ class Session:
 
     def move_gani(self, kind, px=None, py=None):
         """The gani for standing ("idle") or walking ("walk"): `swim` in water (the real client does that), else the (replaced) default."""
+        if self.me.get("HORSEIMAGE"): return self.resolve_ani(kind)   # a horse does not swim
         return "swim" if self.in_water(px, py) and ganimod.load("swim") is not None else self.resolve_ani(kind)
 
     def play_gani(self, name, params=()):
@@ -1669,7 +1692,9 @@ class Session:
     def update_gani(self):
         """Non-looping ganis end by themselves: go back to SETBACKTO (default idle)."""
         base = (self.me.get("GANI") or "idle").split(",")[0]
-        if base in ("idle", "walk", "swim") or self.attacking() or self.holding_pose(): return
+        # the standing / walking ganis (also on a horse: ridestill / ride) are not one-shot ganis to end: treated as idle, ridestill was
+        # restarted again and again, and each restart held the gani for 0.3 s, so walking never showed "ride" (horse and rider slid along standing)
+        if base in ("idle", "walk", "swim", self.resolve_ani("idle"), self.resolve_ani("walk")) or self.attacking() or self.holding_pose(): return
         g = ganimod.load(base)
         if g is None or g.loop or g.continuous: return
         if time.time() - self.gani_start >= ganimod.duration(g) and time.time() >= self.weapon_ani_until:
