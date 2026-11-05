@@ -577,6 +577,9 @@ def main():
     Dw, _ = npc_world(); Dw.gmap = None; Dw.level_name = "wm_d3.nw"; G = __import__("gclient")
     lv_ = Dw.levels[Dw.level_name] = G.Level("wm_d3.nw"); lv_.board = bytearray(8192); lv_.links = [["wm_c3.nw", "0", "0", "1", "64", "61", "playery"], ["wm_d2.nw", "0", "0", "64", "1", "playerx", "61"], ["wm_d4.nw", "0", "63", "64", "1", "playerx", "0"], ["other.nw", "37", "25", "2", "1", "39", "4"]]
     check(Dw.adjacent_levels() == [("wm_c3.nw", -61.0, 0.0), ("wm_d2.nw", 0.0, -61.0), ("wm_d4.nw", 0.0, 63.0)], f"edge links make neighbours: {Dw.adjacent_levels()}")
+    lv_.links.append(["zz_door.nw", "1", "63", "64", "1", "60.5", "55"])   # laboo1's bottom edge: a door to a fixed spot, not a neighbour
+    check(Dw.adjacent_levels() == [("wm_c3.nw", -61.0, 0.0), ("wm_d2.nw", 0.0, -61.0), ("wm_d4.nw", 0.0, 63.0)], f"an edge link to a fixed spot makes no neighbour: {Dw.adjacent_levels()}")
+    lv_.links.pop()
     nb_ = Dw.levels["wm_c3.nw"] = G.Level("wm_c3.nw"); nb_.board = bytearray(8192)
     check(not Dw.coll.tile_blocked(Dw, -3, 10, None) and Dw.coll.tile_blocked(Dw, 70, 10, None) is True, "beyond the left edge the neighbour's tiles count (free), where nothing touches it is a wall")
     Do, _ = npc_world(); Do.local_inventory = False; so = []; Do.send = lambda l: so.append(bytes(l)); Do.pos = (300, 300); Do.me["SPRITE"] = 3; add_npc(Do, 6001, "if (created) { setshape 1,32,32; }", 332, 316)

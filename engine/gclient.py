@@ -1027,6 +1027,10 @@ class Session:
             try: x, y, w, h = (float(v) for v in l[1:5]); dx, dy = l[5], l[6]
             except (ValueError, IndexError): continue
             if not ((h == 1 and w >= 32 and y in (0, 63)) or (w == 1 and h >= 32 and x in (0, 63))): continue
+            # Only a link that keeps the coordinate along its edge (playerx on a top / bottom edge, playery on a left / right one) joins two
+            # levels side by side. One to a fixed spot is a door: laboo1's bottom edge goes to worldmap_b3 at 60.5,55, and taking it as a
+            # neighbour put the worldmap 59.5 tiles to the left, where the player could walk into it - and was saved at x -11.5 in laboo1.
+            if (h == 1 and dx != "playerx") or (w == 1 and dy != "playery"): continue
             off = lambda own, v: 0.0 if v in ("playerx", "playery") else own - float(v)
             try: out.append((l[0], off(x, dx), off(y, dy)))
             except ValueError: pass
