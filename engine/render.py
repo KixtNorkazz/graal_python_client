@@ -104,10 +104,8 @@ _level_img = {}
 def _clear_tile_caches():
     _ts_cache.clear(); _tile_img.clear(); _level_img.clear()
 
-def tileset_for(level_name, tiledef_script, npc_scripts, other_scripts=(), base=None):
-    """Default pics1.png, then tiledefs in order: the TileDefs weapon and the NPC scripts of other loaded levels (prefix match only), then
-    this level's own NPC scripts (prefix match or #L). `removetiledefs` (optionally with a prefix) drops what was registered before it.
-    The canvas is cached by what was applied, so crossing into a level with the same tiles costs nothing."""
+def _applied_defs(level_name, tiledef_script, npc_scripts, other_scripts=()):
+    """The tiledefs that apply to a level, in order: (image, a, b, is_addtiledef2). For addtiledef a is its type, for addtiledef2 (a, b) is x, y."""
     defs = []
     def feed(cmds, own):
         for c in cmds:
@@ -118,7 +116,22 @@ def tileset_for(level_name, tiledef_script, npc_scripts, other_scripts=(), base=
     for sc in other_scripts: feed(_tiledef_cmds(sc), False)
     for sc in npc_scripts: feed(_tiledef_cmds(sc), True)
     lname = level_name.lower()
-    applied = [(img, a, b, two) for img, prefix, a, b, two in defs if prefix == "#L" or lname.startswith(prefix.lower())]
+    return [(img, a, b, two) for img, prefix, a, b, two in defs if prefix == "#L" or lname.startswith(prefix.lower())]
+
+def tileset_type(level_name, tiledef_script, npc_scripts, other_scripts=()):
+    """The tile type table of a level: 1 ("new order", tiletypes.TYPE1) or 0 (standard, TYPE0), from the type of its addtiledef.
+    With several addtiledef for one level the FIRST one's type counts: the ironcaps_ levels get valtiles_brookhurst.png,ironcaps_,1 from the
+    TileDefs weapon and then valtiles_brookhurst8bit.png,ironcaps_,0 from an NPC of their own, and their boards are laid out for type 1
+    (with type 0 about 93 % of every level was wall and the player walked on the spot); that held for all 36 levels with mixed types."""
+    for img, a, b, two in _applied_defs(level_name, tiledef_script, npc_scripts, other_scripts):
+        if not two: return 1 if a == 1 else 0
+    return 0
+
+def tileset_for(level_name, tiledef_script, npc_scripts, other_scripts=(), base=None):
+    """Default pics1.png, then tiledefs in order: the TileDefs weapon and the NPC scripts of other loaded levels (prefix match only), then
+    this level's own NPC scripts (prefix match or #L). `removetiledefs` (optionally with a prefix) drops what was registered before it.
+    The canvas is cached by what was applied, so crossing into a level with the same tiles costs nothing."""
+    applied = _applied_defs(level_name, tiledef_script, npc_scripts, other_scripts)
     base_name = base or BASE_TILESET; base = load_image(base_name, "tilesets"); ims = [load_image(d[0], "tilesets") for d in applied]
     key = (base_name.lower(), base is not None, tuple((d, im is not None) for d, im in zip(applied, ims)))
     c = _ts_cache.get(key)

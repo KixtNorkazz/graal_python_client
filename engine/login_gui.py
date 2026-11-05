@@ -141,6 +141,9 @@ def contact(screen, win, version, listserver, game_host, verbose=False):
     try:
         s = Session(acc, pw, version, listserver, game_host)
         servers, notes = list_servers_full(*s.listserver, s.account, s.password, False)
+        refused = next((p.decode("latin1", "replace").strip() for t, p in notes if t == 4), "")   # the list server's PLO_ERROR (wrong password ...)
+        if refused:
+            screen.status, screen.status_color = refused + "\nA new account name gets the password you type the first time.", (255, 150, 130); return None
         if not servers:
             screen.status, screen.status_color = "The server list has no game server online.", (255, 150, 130); return None
         welcome = next((p.decode("latin1", "replace").replace("\r", " ") for t, p in notes if t == 2), "")

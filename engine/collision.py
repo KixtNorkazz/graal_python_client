@@ -2,6 +2,12 @@
 Player blocking box = 16x16 px at (x+16, y+32), the player's feet (gs2emu uses the same reference point x+1.5, y+2 tiles)."""
 from tiletypes import TYPE0
 
+
+def _table(s, level_name):
+    """The level's tile type table (TYPE1 for tilesets added with type 1, \"new order\"); TYPE0 for sessions without one (tests, the editor)."""
+    f = getattr(s, "tile_table", None)
+    return f(level_name) if f else TYPE0
+
 BLOCKING = (20, 21, 22)
 BOX = (16, 32, 16, 16)
 
@@ -85,29 +91,30 @@ class Collision:
         rows = s.gmap_rows() if s.gmap else None; lx, ly = gtx // 64, gty // 64
         if rows:
             if not (0 <= ly < len(rows) and 0 <= lx < len(rows[0])): return None
-            lv = s.levels.get(rows[ly][lx])
+            name = rows[ly][lx]
         else:
             if (lx, ly) != (0, 0): return None
-            lv = s.levels.get(s.level_name)
+            name = s.level_name
+        lv = s.levels.get(name)
         if not lv or not lv.board: return None
-        return TYPE0[lv.tile(gtx % 64, gty % 64) & 0xFFF]
+        return _table(s, name)[lv.tile(gtx % 64, gty % 64) & 0xFFF]
 
     def tile_blocked(self, s, gtx, gty, rows):
         """Is global tile (gtx, gty) a wall? Unknown (unloaded) gmap levels count as free, outside a single level as blocked."""
         lx, ly = gtx // 64, gty // 64
         if rows:
             if not (0 <= ly < len(rows) and 0 <= lx < len(rows[0])): return True
-            lv = s.levels.get(rows[ly][lx])
+            name = rows[ly][lx]; lv = s.levels.get(name)
             if not lv or not lv.board: return False
         else:
             if (lx, ly) != (0, 0):
                 for name, ox, oy in s.adjacent_levels():
                     nl = s.levels.get(name); tx, ty = gtx - int(ox), gty - int(oy)
-                    if nl and nl.board and 0 <= tx < 64 and 0 <= ty < 64: return TYPE0[nl.tile(tx, ty) & 0xFFF] in BLOCKING
+                    if nl and nl.board and 0 <= tx < 64 and 0 <= ty < 64: return _table(s, name)[nl.tile(tx, ty) & 0xFFF] in BLOCKING
                 return True
-            lv = s.levels.get(s.level_name)
+            name = s.level_name; lv = s.levels.get(name)
             if not lv or not lv.board: return False
-        return TYPE0[lv.tile(gtx % 64, gty % 64) & 0xFFF] in BLOCKING
+        return _table(s, name)[lv.tile(gtx % 64, gty % 64) & 0xFFF] in BLOCKING
 
     def blocked(self, s, px, py, skip=None):
         """True if the player's blocking box at local position (px, py) overlaps a wall tile or an NPC shape (`skip`: ids of NPCs to ignore,

@@ -1095,6 +1095,32 @@ class Session:
         bx, by, bw, bh = collision.BOX; x0, y0, x1, y1 = x + bx, y + by, x + bx + bw - 1, y + by + bh - 1
         return any(not (0 <= px < 1024 and 0 <= py < 1024) and self._next_cell(px, py) is None for px, py in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)))
 
+    def tile_table(self, level_name):
+        """The tile type table (tiletypes.TYPE0 or TYPE1) for a level, from its addtiledef type (render.tileset_type); cached until NPC scripts,
+        the TileDefs weapon or the remembered tiledefs change."""
+        import render
+        from tiletypes import TYPE0, TYPE1
+        mem = self.__dict__.get("tiledef_memory", {})
+        tw = self.weapons.get("TileDefs", b"")
+        key = (level_name, id(tw), len(tw), getattr(self, "npc_rev", 0), len(mem), self.gmap)   # id: a new TileDefs weapon is a new bytes object
+        cache = self.__dict__.setdefault("_tile_tables", {})
+        if key in cache: return cache[key]
+        tdefs = tw.replace(b"\xa7", b"\n").decode("latin1")
+        own, other = [], list(mem)
+        cell = None
+        if self.gmap:
+            rows = self.gmap_rows() or []
+            cell = next(((x, y) for y, r in enumerate(rows) for x, n in enumerate(r) if n == level_name), None)
+        for n in self.npcs.values():
+            sc = n.get("SCRIPT")
+            if not sc or "tiledef" not in sc: continue
+            mine = (cell is not None and (n.get("GMAPLEVELX"), n.get("GMAPLEVELY")) == cell) if self.gmap else level_name == self.level_name
+            (own if mine else other).append(sc)
+        table = TYPE1 if render.tileset_type(level_name, tdefs, own, other) == 1 else TYPE0
+        if len(cache) > 64: cache.clear()
+        cache[key] = table; cache.setdefault("_keep", []).append(tw)   # keep the bytes alive so its id is not reused while the key is cached
+        return table
+
     def gmap_rows(self):
         if not self.gmap: return None
         import render
@@ -1616,8 +1642,7 @@ class Session:
         lv = self.levels.get(level or self.level_name); tx, ty = int(x // 1), int(y // 1)
         if not (0 <= tx < 64 and 0 <= ty < 64): return True
         if not lv or not lv.board: return False
-        from tiletypes import TYPE0
-        return TYPE0[lv.tile(tx, ty) & 0xFFF] in collision.BLOCKING
+        return self.tile_table(level or self.level_name)[lv.tile(tx, ty) & 0xFFF] in collision.BLOCKING
 
     def play_sound(self, name, loop=False, from_weapon=False):
         """GS1 play / playlooped: the viewer installs a device-backed Audio; headless sessions just record the request.

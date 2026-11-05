@@ -43,6 +43,21 @@ def main():
     assert _ts.getpixel((1030, 5)) == (0, 255, 0, 255), "a plain level gets the prefixed tiles registered in the level before"
     _o = _r.tileset_for("zzother.nw", "", [], mem)
     assert _o.getpixel((1030, 5)) != (0, 255, 0, 255), "but only levels whose name starts with the prefix"
+    # The tile type table comes from the addtiledef type; with several for one level the first one's type counts (ironcaps_: the
+    # TileDefs weapon registers type 1, the level's own NPC then an 8-bit copy with type 0, and the boards are laid out for type 1).
+    w = "addtiledef zz-full.png,zzcaps_,1;"; own = ["addtiledef zz-small.png,zzcaps_,0;"]
+    assert _r.tileset_type("zzcaps_e6.nw", w, own) == 1, "the first addtiledef's type counts"
+    assert _r.tileset_type("zzcaps_e6.nw", "", own) == 0 and _r.tileset_type("other.nw", w, []) == 0, "type 0, and levels the prefix does not match"
+    assert _r.tileset_type("zzcaps_e6.nw", "addtiledef2 zz-small.png,zzcaps_,1024,0;\n" + w, []) == 1, "addtiledef2 lines do not count for the type"
+    import gclient as _g2, collision as _c
+    from tiletypes import TYPE0 as _T0, TYPE1 as _T1
+    t = next(i for i in range(4096) if _T0[i] in _c.BLOCKING and _T1[i] not in _c.BLOCKING)   # a wall in type 0, floor in type 1
+    G = _g2.Session.__new__(_g2.Session); _g2.Session.__init__(G, "a", "b", "222", ("127.0.0.1", 1)); G.send = lambda l: None
+    lv = _g2.Level("zzcaps_e6.nw"); lv.board = bytes([t & 255, t >> 8]) * 4096; G.levels["zzcaps_e6.nw"] = lv; G.level_name = "zzcaps_e6.nw"; G.gmap = None
+    G.weapons["TileDefs"] = w.encode()
+    assert not G.coll.blocked(G, 480, 480), "with type 1 that tile is floor: the player can walk"
+    G.weapons["TileDefs"] = b"addtiledef zz-full.png,zzcaps_,0;"
+    assert G.coll.blocked(G, 480, 480), "with type 0 it is a wall"
     print("tiledefs tests passed")
 
 if __name__ == "__main__": main()

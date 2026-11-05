@@ -33,6 +33,16 @@ def main():
     im = s3.draw(0.0); check(im.size == (lg.W, lg.H), "the server list draws")
     check(s3.hit(*s3.row_rect(1)[:2]) == "row1" and s3.key(window.K_DOWN) is None and s3.sel == 1 and s3.key(window.K_DOWN) is None and s3.sel == 0, "Up/Down choose a server, click hit test")
     check(s3.key(window.K_RETURN) == "join" and s3.key(window.K_ESCAPE) is None and s3.servers is None, "Enter joins, Esc goes back to the fields")
+    # A wrong password: the list server answers with PLO_ERROR (4) and no servers; its text is shown, not "no game server online".
+    import minclient
+    class _W:
+        def present(self, b): pass
+    real = minclient.list_servers_full
+    minclient.list_servers_full = lambda *a, **k: ([], [(4, b"Account name or password is invalid.")])
+    try:
+        s4 = lg.Screen({}); s4.vals.update(account="Rowan", password="wrong", nick="")
+        check(lg.contact(s4, _W(), "222", ("127.0.0.1", 1), None) is None and s4.status.startswith("Account name or password is invalid.") and "first time" in s4.status, f"the refusal is shown: {s4.status!r}")
+    finally: minclient.list_servers_full = real
     print("login gui tests passed")
 
 main()

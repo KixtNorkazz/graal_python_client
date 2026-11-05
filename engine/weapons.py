@@ -182,7 +182,8 @@ def _keycode(c):
 def _water(ctx, x, y):
     """GS1 onwater(x,y): is the tile at level-local tile (x,y) water (tile types 11 / 12)?"""
     from tiletypes import TYPE0
-    return 1.0 if TYPE0[_tile_at(ctx, x, y)] in (11, 12) else 0.0
+    level = getattr(ctx.w, "level", None) or ctx.s.level_name; table = ctx.s.tile_table(level) if hasattr(ctx.s, "tile_table") else TYPE0
+    return 1.0 if table[_tile_at(ctx, x, y)] in (11, 12) else 0.0
 
 def _tile_at(ctx, x, y):
     lv = ctx.s.levels.get(getattr(ctx.w, "level", None) or ctx.s.level_name); tx, ty = int(to_float(x)), int(to_float(y))
